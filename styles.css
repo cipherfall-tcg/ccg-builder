@@ -40,6 +40,9 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 
+/* Ensure [hidden] always wins over any display rule in author CSS */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   font-family: var(--sans);
@@ -372,6 +375,45 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 
+.files-howto {
+  border: 1px solid var(--line-bright);
+  border-radius: 8px;
+  background: rgba(0, 229, 255, 0.06);
+  padding: 10px 12px;
+  margin: 10px 0 12px;
+}
+
+.files-howto h3 {
+  margin: 0 0 6px;
+}
+
+.files-howto ol {
+  margin: 0 0 0 18px;
+  padding: 0;
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.files-subsection {
+  border-top: 1px dashed var(--line);
+  margin-top: 12px;
+  padding-top: 10px;
+}
+
+.files-subsection h3 {
+  margin: 0 0 8px;
+}
+
+.files-actions {
+  margin-top: 2px;
+}
+
+.files-fullpath {
+  word-break: break-all;
+  margin-top: 6px;
+}
+
 .table-wrap {
   overflow: auto;
   border: 1px solid var(--line-bright);
@@ -379,6 +421,13 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 }
 
 table { width: 100%; border-collapse: collapse; min-width: 760px; }
+
+/* Wildcard table: auto-size columns to content, widen only as needed */
+table[aria-label="Wildcard ratios"] {
+  width: auto;
+  min-width: 0;
+  table-layout: auto;
+}
 
 th, td {
   border-bottom: 1px solid var(--line);
@@ -589,7 +638,150 @@ body.report-page::before {
   background: var(--cyan-dim);
 }
 
-.pill {
+.gdpr-banner {
+  padding: 14px 16px;
+  margin-top: 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.gdpr-banner[hidden] { display: none !important; }
+
+.gdpr-banner-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.gdpr-title {
+  display: block;
+  font-family: var(--display);
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: inherit;
+  margin-bottom: 6px;
+}
+
+.gdpr-text {
+  margin: 4px 0;
+  font-size: 0.82rem;
+  color: inherit;
+  opacity: 0.85;
+  line-height: 1.5;
+}
+
+.gdpr-list {
+  margin: 6px 0 6px 18px;
+  padding: 0;
+  font-size: 0.80rem;
+  color: inherit;
+  opacity: 0.85;
+  line-height: 1.6;
+}
+
+.gdpr-list code {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--ink);
+  background: rgba(0, 229, 255, 0.08);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.gdpr-accept {
+  white-space: nowrap;
+  align-self: flex-start;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* ── License gate overlay ───────────────────────────────────────────── */
+.license-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+}
+
+.license-overlay[hidden] { display: none !important; }
+
+.license-modal {
+  max-width: 520px;
+  width: calc(100% - 40px);
+  border-radius: 10px;
+  padding: 28px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.7);
+}
+
+.license-title {
+  font-family: var(--display);
+  font-size: 1.1rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: inherit;
+  margin: 0 0 4px;
+}
+
+.license-body {
+  margin: 0;
+  font-size: 0.88rem;
+  color: inherit;
+  opacity: 0.9;
+  line-height: 1.55;
+}
+
+.license-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.license-btn {
+  display: inline-block;
+  border-radius: 4px;
+  padding: 8px 18px;
+  font-family: var(--display);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  border: 2px solid currentColor;
+  transition: background 0.15s, color 0.15s;
+}
+
+.license-btn-primary {
+  background: #60ffa0;
+  color: #0b0c1a;
+  border-color: #60ffa0;
+}
+
+.license-btn-primary:hover {
+  background: #a0ffc0;
+  border-color: #a0ffc0;
+}
+
+.license-btn-ghost {
+  background: transparent;
+  color: inherit;
+}
+
+.license-btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+
   display: inline-block;
   padding: 2px 8px;
   border-radius: 2px;
@@ -600,7 +792,7 @@ body.report-page::before {
   letter-spacing: 0.04em;
 }
 
-.pill.fp { color: var(--amber); background: var(--amber-dim); border-color: rgba(255, 171, 0, 0.4); }
+.pill.fp { color: #ff8ad8; background: rgba(204, 0, 255, 0.18); border-color: rgba(204, 0, 255, 0.45); }
 .pill.tc { color: var(--cyan);  background: var(--cyan-dim);  border-color: rgba(0, 229, 255, 0.4); }
 
 .rule-row {
@@ -689,10 +881,11 @@ body.report-page::before {
 }
 
 .fraction-control {
-  display: grid;
-  grid-template-columns: 28px minmax(74px, 1fr) 28px;
+  display: inline-grid;
+  grid-template-columns: 26px auto 26px;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  width: max-content;
 }
 
 .fraction-control input {
@@ -716,6 +909,109 @@ body.report-page::before {
   font-variant-numeric: tabular-nums;
   font-family: var(--mono);
 }
+
+.fraction-control span {
+  min-width: 0;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--mono);
+  padding: 0 2px;
+}
+
+.stacked-fraction {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.frac-bar {
+  align-self: stretch;
+  width: 100%;
+  min-width: 0;
+  height: 1px;
+  background: var(--ink-soft);
+  opacity: 0.5;
+  border-radius: 1px;
+}
+
+.frac-pct {
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  margin-top: 2px;
+}
+
+.lcd-part {
+  min-width: 24px;
+  display: inline-block;
+  text-align: center;
+}
+
+.wildcard-num-input,
+.wildcard-den-input {
+  width: 52px;
+  min-width: 0;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.pin-col {
+  text-align: center;
+  vertical-align: middle;
+}
+
+.pin-col input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--amber);
+}
+
+tr.row-pinned > td {
+  background: rgba(255, 171, 0, 0.10);
+  border-top: 1px solid rgba(255, 171, 0, 0.30);
+  border-bottom: 1px solid rgba(255, 171, 0, 0.30);
+}
+
+tr.row-pinned > td:first-child {
+  border-left: 3px solid var(--amber);
+}
+
+/* ── Wildcard table column banding ─────────────────────────────────── */
+/* Columns: 1 Rarity | 2 Pin | 3 Fraction | 4 LCD | 5 Reduced | 6 Status */
+table[aria-label="Wildcard ratios"] th:nth-child(1),
+table[aria-label="Wildcard ratios"] td:nth-child(1) {
+  border-right: 1px solid var(--line-bright);
+}
+table[aria-label="Wildcard ratios"] th:nth-child(2),
+table[aria-label="Wildcard ratios"] td:nth-child(2) {
+  background: rgba(255, 171, 0, 0.06);
+  border-right: 1px solid rgba(255, 171, 0, 0.20);
+}
+table[aria-label="Wildcard ratios"] th:nth-child(3),
+table[aria-label="Wildcard ratios"] td:nth-child(3) {
+  background: rgba(0, 229, 255, 0.05);
+  border-right: 1px solid var(--line-bright);
+}
+table[aria-label="Wildcard ratios"] th:nth-child(4),
+table[aria-label="Wildcard ratios"] td:nth-child(4) {
+  background: rgba(128, 100, 255, 0.08);
+  border-right: 1px solid var(--line-bright);
+}
+table[aria-label="Wildcard ratios"] th:nth-child(5),
+table[aria-label="Wildcard ratios"] td:nth-child(5) {
+  background: rgba(216, 238, 255, 0.04);
+  border-right: 1px solid var(--line-bright);
+}
+/* Status (col 6) — no tint */
+
+/* Pinned row overrides */
+tr.row-pinned > td:nth-child(2) { border-right: 1px solid rgba(255, 171, 0, 0.35); }
+tr.row-pinned > td:nth-child(3) { border-right: 1px solid rgba(255, 171, 0, 0.25); }
+tr.row-pinned > td:nth-child(4) { border-right: 1px solid rgba(255, 171, 0, 0.25); }
+tr.row-pinned > td:nth-child(5) { border-right: 1px solid rgba(255, 171, 0, 0.25); }
 
 .pin-wrap {
   display: inline-flex;

@@ -3,9 +3,12 @@
   const APP_VERSION = "0.1.0";
   const SCHEMA_VERSION = 1;
   const STORAGE_KEY = "rcpc.packcalc.state";
+  const LICENSE_MAILTO = "mailto:license@cipherfall.com?subject=Commercial%20License%20Request%20%E2%80%94%20CCG%20Builder&body=Hello%2C%0A%0AI%20would%20like%20to%20obtain%20a%20commercial%20license%20for%20CCG%20Builder.%0A%0AOrganization%20name%3A%20%5Byour%20organization%5D%0ANumber%20of%20users%3A%20%5Bnumber%5D%0AEstimated%20days%20of%20use%3A%20%5Bnumber%5D%0AUse%20case%20description%3A%20%5Bdescribe%20how%20you%20intend%20to%20use%20the%20tool%5D%0A%0APlease%20reply%20with%20licensing%20terms%20and%20payment%20instructions.%0A%0AThank%20you.";
   const STORAGE_ALERT_KEY = "rcpc.packcalc.alerted";
   const STORAGE_PINNED_DIR_KEY = "rcpc.packcalc.pinnedDirSupported";
   const STORAGE_PRIVACY_BANNER_KEY = "rcpc.packcalc.privacyNoticeDismissed";
+  const STORAGE_GDPR_BANNER_KEY    = "rcpc.packcalc.gdprNoticeDismissed";
+  const STORAGE_LICENSE_KEY        = "rcpc.packcalc.licenseAcknowledged";
   const TOLERANCE = 1e-9;
   const FRACTION_DENOM_CAP = 9999;
   const MAX_JSON_BYTES = 5 * 1024 * 1024;
@@ -16,17 +19,20 @@
   const LOCALES = ["en-US", "en-GB", "fr-FR", "de-DE", "es-ES", "it-IT", "pt-BR", "ja-JP", "ko-KR", "zh-CN", "nl-NL"];
 
   const DEFAULT_RULES = [
-    { id: "packComposition", label: "Respect cards-per-pack composition", group: "fp", advice: "Foundational Pair: locks slot integrity." },
-    { id: "productionRanges", label: "Prefer recommended production ranges", group: null, advice: "Treat as soft guardrails unless explicitly overridden." },
-    { id: "packagingBarrier", label: "Snap run to packaging barriers", group: null, advice: "Maintains operational packaging consistency." },
-    { id: "perCardOverride", label: "Enforce explicit per-card overrides", group: null, advice: "Override mode only when enabled." },
-    { id: "minRun", label: "Minimize print run size", group: null, advice: "Favors least material usage under constraints." },
-    { id: "wildcardDistribution", label: "Match wildcard long-run distribution", group: null, advice: "Keeps expected wildcard yields aligned." },
-    { id: "exactTotal", label: "Preserve exact total card count", group: "fp tc", advice: "Foundational + Tradeoff: exact total may increase drift pressure." },
-    { id: "rarityDrift", label: "Keep rarity drift low", group: "tc", advice: "Tradeoff Cluster: lower drift may compete with strict bounds." },
-    { id: "rarityMins", label: "Enforce rarity-level per-card minimums", group: null, advice: "Applies by rarity by default." },
-    { id: "strictBounds", label: "Respect strict per-rarity min/max bounds", group: "tc", advice: "Tradeoff Cluster: strict bounds can force larger drift." }
+    { id: "packComposition", label: "Respect cards-per-pack composition", group: "fp", advice: "This keeps the slot plan structurally valid so each pack still contains the intended mix of rarity slots. Breaking composition can make downstream percentages look correct while pack contents are operationally wrong. It is usually best treated as a hard guardrail before optimization goals." },
+    { id: "productionRanges", label: "Prefer recommended production ranges", group: null, advice: "This favors run sizes that are practical for manufacturing and distribution instead of mathematically minimal extremes. It can increase total printed quantity if the nearest feasible production window is larger than the strict minimum. Use it as a soft constraint when operational efficiency matters more than absolute minimization." },
+    { id: "packagingBarrier", label: "Snap run to packaging barriers", group: null, advice: "This aligns output to whole packaging units such as boxes or cartons to reduce partial handling and waste. It may push the run above the smallest mathematically sufficient pack count. The tradeoff is cleaner logistics and simpler inventory movement." },
+    { id: "perCardOverride", label: "Enforce explicit per-card overrides", group: null, advice: "When enabled, explicit per-card minimums become the active floor for allocation behavior. This can override broader rarity-level balancing and force additional volume into specific cards. Keep this prioritized only when card-level guarantees are contractual or design-critical." },
+    { id: "minRun", label: "Minimize print run size", group: null, advice: "This drives toward the lowest total run that still satisfies active constraints. It reduces material usage and carrying cost but can increase sensitivity to rounding and drift tradeoffs. Pair it carefully with strict bounds and barrier snapping to avoid unstable edge cases." },
+    { id: "wildcardDistribution", label: "Match wildcard long-run distribution", group: null, advice: "This keeps wildcard assignment aligned with the configured probability model over many packs. Prioritizing it improves long-run statistical fidelity but may conflict with hard minimums in short runs. It is most important when wildcard outcomes are player-facing and audited for fairness." },
+    { id: "exactTotal", label: "Preserve exact total card count", group: "fp tc", advice: "This enforces that aggregate allocated cards exactly match the requested target total. Maintaining exact totals can require shifts that increase rarity drift or tighten other constraints. Treat it as a cross-cutting integrity rule that interacts with both Choice 1 and Choice 2 priorities." },
+    { id: "rarityDrift", label: "Keep rarity drift low", group: "tc", advice: "This minimizes deviation between target rarity proportions and achieved output. Lower drift improves distribution quality but can force compromises in strict-bound compliance or run-size goals. It is most useful when statistical balance is a key product promise." },
+    { id: "rarityMins", label: "Enforce rarity-level per-card minimums", group: null, advice: "This ensures each rarity meets at least its defined minimum contribution before optional balancing goals are considered. Strong minimums can consume flexibility that would otherwise reduce drift. Keep this above cosmetic optimizations when floor guarantees are non-negotiable." },
+    { id: "strictBounds", label: "Respect strict per-rarity min/max bounds", group: "tc", advice: "This enforces hard lower and upper bounds for each rarity so outputs never cross declared limits. Strict bounds can force higher drift or larger runs when constraints conflict. Prioritize this highly when compliance and guardrails are more important than smooth distribution." }
   ];
+
+  const DEFAULT_RULE_GROUP_BY_ID = Object.fromEntries(DEFAULT_RULES.map((r) => [r.id, r.group || ""]));
+  const DEFAULT_RULE_ADVICE_BY_ID = Object.fromEntries(DEFAULT_RULES.map((r) => [r.id, r.advice || ""]));
 
   function generateId(prefix) {
     return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
@@ -531,375 +537,26 @@
     };
   }
 
-  /* === FRACTION AND PROBABILITY HELPERS === */
-  function gcd(a, b) {
-    let x = Math.abs(a);
-    let y = Math.abs(b);
-    while (y !== 0) {
-      const t = y;
-      y = x % y;
-      x = t;
-    }
-    return x || 1;
-  }
+  /* === MODULE WIRING === */
+  const {
+    gcd, reduceFraction, toFractionApprox, renderFractionText,
+    splitWildcardInputParts, composeWildcardInput, normalizeProbabilityToFraction,
+    parseFractionInput, parseProbabilityInput, trimLeadingZerosSafe
+  } = window.CCGFractionMath;
 
-  function reduceFraction(num, den) {
-    const d = gcd(num, den);
-    return [num / d, den / d];
-  }
+  window.CCGValidation.init({
+    ensurePackSelections, syncPackConfiguration,
+    getPackSet, getPackComposition, makeDefaultPackCriteria,
+    parseProbabilityInput, TOLERANCE, MAX_RARITY_COUNT
+  });
+  const { validateState } = window.CCGValidation;
 
-  function toFractionApprox(value, cap = FRACTION_DENOM_CAP) {
-    let bestNum = 0;
-    let bestDen = 1;
-    let bestErr = Number.POSITIVE_INFINITY;
-    for (let den = 1; den <= cap; den += 1) {
-      const num = Math.round(value * den);
-      const err = Math.abs(value - num / den);
-      if (err < bestErr) {
-        bestErr = err;
-        bestNum = num;
-        bestDen = den;
-      }
-      if (err <= TOLERANCE) break;
-    }
-    const [n, d] = reduceFraction(bestNum, bestDen);
-    return { n, d, approx: Math.abs(value - n / d) > TOLERANCE };
-  }
-
-  function renderFractionText(value) {
-    const frac = toFractionApprox(value, FRACTION_DENOM_CAP);
-    return `${frac.n}/${frac.d}${frac.approx ? " (approx)" : ""}`;
-  }
-
-  function splitWildcardInputParts(raw) {
-    const text = String(raw ?? "").trim();
-    const slash = text.indexOf("/");
-    if (slash < 0) {
-      return { numRaw: text, denRaw: "" };
-    }
-    return {
-      numRaw: text.slice(0, slash).trim(),
-      denRaw: text.slice(slash + 1).trim()
-    };
-  }
-
-  function composeWildcardInput(numRaw, denRaw) {
-    const n = String(numRaw ?? "").trim();
-    const d = String(denRaw ?? "").trim();
-    if (!d) return n;
-    return `${n}/${d}`;
-  }
-
-  function normalizeProbabilityToFraction(value) {
-    const frac = toFractionApprox(value, FRACTION_DENOM_CAP);
-    return { n: frac.n, d: frac.d, text: `${frac.n}/${frac.d}`, approx: frac.approx };
-  }
-
-  function parseFractionInput(text) {
-    const raw = String(text || "").trim();
-    const m = raw.match(/^\s*(\d+)\s*\/\s*(\d+)\s*$/);
-    if (!m) {
-      return { ok: false, error: "Use integer a/b format." };
-    }
-    const a = Number(m[1]);
-    const b = Number(m[2]);
-    if (!Number.isInteger(a) || !Number.isInteger(b)) {
-      return { ok: false, error: "Use integer a/b values only." };
-    }
-    if (b === 0) return { ok: false, error: "Denominator cannot be zero." };
-    if (a < 0 || b < 0) return { ok: false, error: "Negative values are not allowed." };
-    const v = a / b;
-    if (v > 1 + TOLERANCE) return { ok: false, error: "Fraction value must be <= 1." };
-    return { ok: true, value: v };
-  }
-
-  function parseProbabilityInput(raw, _mode) {
-    const text = String(raw ?? "").trim();
-    if (!text) {
-      return { ok: false, error: "Enter a fraction, decimal, or percent." };
-    }
-
-    if (text.includes("/")) {
-      return parseFractionInput(text);
-    }
-
-    const hasPercent = text.endsWith("%");
-    const numericText = hasPercent ? text.slice(0, -1).trim() : text;
-    const parsedNum = Number(numericText);
-    if (!Number.isFinite(parsedNum)) {
-      return { ok: false, error: "Enter fraction a/b, decimal, or percent value." };
-    }
-
-    const asProbability = hasPercent
-      ? parsedNum / 100
-      : (parsedNum > 1 ? parsedNum / 100 : parsedNum);
-
-    if (asProbability < -TOLERANCE) return { ok: false, error: "Probability cannot be negative." };
-    if (asProbability > 1 + TOLERANCE) return { ok: false, error: "Probability must be <= 1." };
-    return { ok: true, value: asProbability };
-  }
-
-  function trimLeadingZerosSafe(raw, mode) {
-    const text = String(raw ?? "").trim();
-    if (!text) return text;
-
-    if (mode === "fraction") {
-      const match = text.match(/^(\d+)\s*\/\s*(\d+)$/);
-      if (!match) return text;
-      const left = match[1].replace(/^0+(?=\d)/, "");
-      const right = match[2].replace(/^0+(?=\d)/, "");
-      return `${left}/${right}`;
-    }
-
-    const decimalMatch = text.match(/^(\d+)(\.\d+)?$/);
-    if (!decimalMatch) return text;
-    const intPart = decimalMatch[1].replace(/^0+(?=\d)/, "");
-    return `${intPart}${decimalMatch[2] || ""}`;
-  }
-
-  /* === VALIDATION === */
-  function validateState(sourceState = state, strictMode = true) {
-    if (typeof sourceState === "boolean") {
-      strictMode = sourceState;
-      sourceState = state;
-    }
-
-    ensurePackSelections(sourceState);
-    syncPackConfiguration(sourceState);
-    const packSet = getPackSet(sourceState);
-    const rarities = packSet?.rarities || [];
-
-    const errors = [];
-    const warnings = [];
-
-    if (!packSet) {
-      errors.push({ key: "packSet", msg: "Associate the pack to a set before calculating." });
-      return { errors, warnings };
-    }
-
-    if (!String(packSet.name || "").trim()) {
-      errors.push({ key: "packSet", msg: "The selected pack set must have a name." });
-    }
-    if (Number(packSet.totalCards || 0) < 1) {
-      errors.push({ key: "packSet", msg: "The selected pack set must define a total card count." });
-    }
-
-    if (rarities.length === 0) {
-      errors.push({ key: "rarities", msg: "Add at least one rarity." });
-    }
-    if (rarities.length > MAX_RARITY_COUNT) {
-      errors.push({ key: "rarities", msg: `Rarity count exceeds max ${MAX_RARITY_COUNT}.` });
-    }
-
-    const seen = new Map();
-    rarities.forEach((r, i) => {
-      const s = String(r.shortcode || "").trim().toUpperCase();
-      if (!s) errors.push({ key: `rarity:${i}:shortcode`, msg: `Rarity ${i + 1} shortcode is required.` });
-      if (seen.has(s)) {
-        errors.push({ key: `rarity:${i}:shortcode`, msg: `Duplicate shortcode "${s}".` });
-      } else {
-        seen.set(s, true);
-      }
-      if (!r.name || !String(r.name).trim()) errors.push({ key: `rarity:${i}:name`, msg: `Rarity ${i + 1} name is required.` });
-      if (Number(r.setCount) < 1) errors.push({ key: `rarity:${i}:setCount`, msg: `Rarity ${i + 1} set cards must be >= 1.` });
-    });
-
-    const raritySetTotal = rarities.reduce((sum, r) => sum + Number(r.setCount || 0), 0);
-    if (Number(packSet.totalCards || 0) >= 1 && raritySetTotal !== Number(packSet.totalCards)) {
-      errors.push({ key: "packSet", msg: `Rarity set-card totals (${raritySetTotal}) must equal total cards in the selected set (${packSet.totalCards}).` });
-    }
-
-    if (sourceState.pack.cardsPerPack < 1 || sourceState.pack.cardsPerPack > 15) {
-      errors.push({ key: "cardsPerPack", msg: "Cards per pack must be 1-15." });
-    }
-    if (sourceState.pack.packsPerBox < 1 || sourceState.pack.boxesPerCarton < 1) {
-      errors.push({ key: "packaging", msg: "Packaging values must be >= 1." });
-    }
-    if (sourceState.pack.packsPerBox < 6 || sourceState.pack.packsPerBox > 36) {
-      warnings.push("Packs per box is outside recommended 6-36 range.");
-    }
-    if (sourceState.pack.boxesPerCarton < 2 || sourceState.pack.boxesPerCarton > 6) {
-      warnings.push("Boxes per carton is outside recommended 2-6 range.");
-    }
-
-    const composition = getPackComposition(sourceState);
-    if (composition.totalSlots !== Number(sourceState.pack.cardsPerPack)) {
-      errors.push({ key: "composition", msg: `Pack slot count (${composition.totalSlots}) must equal cards per pack (${sourceState.pack.cardsPerPack}).` });
-    }
-    if (composition.unassignedSlots > 0) {
-      const firstUnassigned = sourceState.pack.slotPlan.findIndex((slot) => !slot);
-      errors.push({ key: `pack-slot:${firstUnassigned}`, msg: `Assign all pack slots before calculating. ${composition.unassignedSlots} slot${composition.unassignedSlots === 1 ? " is" : "s are"} still unassigned.` });
-    }
-
-    rarities.forEach((r) => {
-      const criteria = sourceState.packCriteria[r.id] || makeDefaultPackCriteria();
-      if (Number(criteria.minCopies) < 0) {
-        errors.push({ key: `criteria:${r.id}:minCopies`, msg: `${r.name || r.shortcode}: rarity min copies cannot be negative.` });
-      }
-      if (Number(criteria.overrideMin) < 0) {
-        errors.push({ key: `criteria:${r.id}:overrideMin`, msg: `${r.name || r.shortcode}: per-card override minimum cannot be negative.` });
-      }
-    });
-
-    if (composition.wildcardSlots > 0) {
-      const eligibles = rarities.filter((r) => sourceState.packCriteria[r.id]?.wildcardEligible);
-      if (eligibles.length === 0) {
-        errors.push({ key: "wildcard", msg: "Wildcard slots exist but no wildcard-eligible rarities are set." });
-      }
-
-      let sum = 0;
-      let parseBlocked = false;
-      for (const r of eligibles) {
-        const input = sourceState.wildcardInputs[r.id] ?? "0/1";
-        const parsed = parseProbabilityInput(input, "fraction");
-        if (!parsed.ok) {
-          if (strictMode) {
-            errors.push({ key: `wildcard:${r.id}`, msg: `${r.name || r.shortcode}: ${parsed.error}` });
-            parseBlocked = true;
-          }
-          continue;
-        }
-        sum += parsed.value;
-      }
-
-      if (!parseBlocked && Math.abs(sum - 1) > TOLERANCE) {
-        errors.push({ key: "wildcard:sum", msg: `Wildcard probabilities must be equal to 1.0 within tolerance. Current sum: ${sum.toFixed(9)}` });
-      }
-    }
-
-    return { errors, warnings };
-  }
-
-  /* === CALCULATION === */
-  function runCalculation(activeState) {
-    ensurePackSelections(activeState);
-    syncPackConfiguration(activeState);
-    const validation = validateState(activeState, true);
-    if (validation.errors.length) {
-      return { ok: false, validation };
-    }
-    const packSet = getPackSet(activeState);
-    const rarities = packSet?.rarities || [];
-
-    const packs = Number(activeState.run.packs);
-    const composition = getPackComposition(activeState);
-    const wildcardSlots = composition.wildcardSlots;
-    const fixedTotals = {};
-    const expectedByRarity = {};
-    const perCard = {};
-
-    rarities.forEach((r) => {
-      const fixed = Number(composition.countsByRarity[r.id] || 0) * packs;
-      fixedTotals[r.id] = fixed;
-      expectedByRarity[r.id] = fixed;
-    });
-
-    if (wildcardSlots > 0) {
-      const wildcardCardsTotal = wildcardSlots * packs;
-      const eligibles = rarities.filter((r) => activeState.packCriteria[r.id]?.wildcardEligible);
-
-      const weighted = eligibles.map((r, idx) => {
-        const p = parseProbabilityInput(activeState.wildcardInputs[r.id] || "0/1", "fraction");
-        const prob = p.ok ? p.value : 0;
-        const expected = prob * wildcardCardsTotal;
-        return { id: r.id, idx, prob, expected, rounded: Math.floor(expected), frac: expected - Math.floor(expected) };
-      });
-
-      const floorTotal = weighted.reduce((s, w) => s + w.rounded, 0);
-      let remaining = wildcardCardsTotal - floorTotal;
-
-      if (activeState.run.roundingPolicy === "drift") {
-        weighted.forEach((w) => {
-          w.rounded = Math.round(w.expected);
-        });
-        const sumRounded = weighted.reduce((s, w) => s + w.rounded, 0);
-        remaining = wildcardCardsTotal - sumRounded;
-      }
-
-      if (remaining !== 0) {
-        const sorted = weighted.slice().sort((a, b) => {
-          if (remaining > 0 && b.frac !== a.frac) return b.frac - a.frac;
-          if (remaining < 0 && a.frac !== b.frac) return a.frac - b.frac;
-          return a.idx - b.idx;
-        });
-
-        let i = 0;
-        while (remaining !== 0 && i < sorted.length * 10) {
-          const target = sorted[i % sorted.length];
-          if (remaining > 0) {
-            target.rounded += 1;
-            remaining -= 1;
-          } else if (target.rounded > 0) {
-            target.rounded -= 1;
-            remaining += 1;
-          }
-          i += 1;
-        }
-      }
-
-      if (activeState.run.roundingPolicy === "strict") {
-        const byId = Object.fromEntries(rarities.map((r) => [r.id, r]));
-        weighted.forEach((w) => {
-          const rarity = byId[w.id];
-          const criteria = activeState.packCriteria[w.id] || makeDefaultPackCriteria();
-          const minCopies = activeState.run.perCardOverrideMode ? Number(criteria.overrideMin || 0) : Number(criteria.minCopies || 0);
-          const minTotal = minCopies * Number(rarity.setCount || 1);
-          const requiredWildcard = Math.max(0, minTotal - fixedTotals[w.id]);
-          if (w.rounded >= requiredWildcard) {
-            return;
-          }
-          let needed = requiredWildcard - w.rounded;
-          const donors = weighted
-            .filter((d) => d.id !== w.id && d.rounded > 0)
-            .sort((a, b) => {
-              if (b.rounded !== a.rounded) return b.rounded - a.rounded;
-              return a.idx - b.idx;
-            });
-          for (const donor of donors) {
-            if (needed <= 0) break;
-            const transfer = Math.min(needed, donor.rounded);
-            donor.rounded -= transfer;
-            w.rounded += transfer;
-            needed -= transfer;
-          }
-        });
-      }
-
-      weighted.forEach((w) => {
-        expectedByRarity[w.id] += w.rounded;
-      });
-    }
-
-    rarities.forEach((r) => {
-      perCard[r.id] = expectedByRarity[r.id] / Number(r.setCount || 1);
-    });
-
-    const totalCards = Object.values(expectedByRarity).reduce((s, v) => s + v, 0);
-
-    const rows = rarities.map((r) => {
-      const total = expectedByRarity[r.id];
-      const percent = totalCards > 0 ? (total / totalCards) * 100 : 0;
-      return {
-        rarityId: r.id,
-        name: r.name,
-        shortcode: r.shortcode,
-        cards: total,
-        perCard: perCard[r.id],
-        percent
-      };
-    });
-
-    return {
-      ok: true,
-      validation,
-      totals: {
-        totalCards,
-        totalPacks: packs,
-        perRarity: expectedByRarity,
-        rows
-      }
-    };
-  }
+  window.CCGCalculator.init({
+    ensurePackSelections, syncPackConfiguration,
+    validateState, getPackSet, getPackComposition,
+    parseProbabilityInput, makeDefaultPackCriteria
+  });
+  const { runCalculation } = window.CCGCalculator;
 
   /* === RENDERING === */
   function renderTabs() {
@@ -1154,6 +811,19 @@
       : statusLine("ok", "Wildcard probabilities are equal to 1.0 within tolerance.");
   }
 
+  function computeWildcardLCD(eligibles) {
+    let lcd = 1;
+    for (const r of eligibles) {
+      const input = state.wildcardInputs[r.id] ?? "0/1";
+      const parsed = parseProbabilityInput(input, "fraction");
+      if (!parsed.ok) continue;
+      const frac = normalizeProbabilityToFraction(parsed.value);
+      const g = gcd(lcd, frac.d);
+      lcd = (lcd / g) * frac.d;
+    }
+    return lcd;
+  }
+
   function renderWildcardTable() {
     const body = byId("wildcardBody");
     body.innerHTML = "";
@@ -1168,6 +838,8 @@
       return;
     }
 
+    const lcd = computeWildcardLCD(eligibles);
+
     eligibles.forEach((r) => {
       if (state.wildcardInputs[r.id] == null) {
         state.wildcardInputs[r.id] = "0/1";
@@ -1181,37 +853,61 @@
       const pendingText = isPendingInvalid
         ? "Pending-invalid. Validate on blur or recalc."
         : "Pending. Validate on blur or recalc.";
-      let decimalDisplay = "-";
-      let fractionDisplay = "-";
-      if (parsed.ok) {
-        decimalDisplay = parsed.value.toFixed(9);
-        fractionDisplay = `${canonical.n}/${canonical.d}`;
-      }
+      const isPinned = !!(state.ui.nudgePins?.[r.id]);
+
+      const lcdNum = canonical ? Math.round(canonical.n * (lcd / canonical.d)) : 0;
+      const reducedDisplay = canonical ? `${canonical.n}/${canonical.d}` : "-";
+      const pct = canonical ? `${(canonical.n / canonical.d * 100).toFixed(1)}%` : "-";
 
       const tr = document.createElement("tr");
+      if (isPinned) tr.classList.add("row-pinned");
       tr.innerHTML = `
         <td>${escapeHtml(r.name || r.shortcode)}</td>
+        <td class="pin-col">
+          <input type="checkbox" data-role="wildcard-pin" data-id="${r.id}" ${isPinned ? "checked" : ""} aria-label="Pin ${escapeHtml(r.name || r.shortcode)}">
+        </td>
         <td>
-          <div class="fraction-control">
-            <button class="tiny-btn" data-role="wildcard-nudge" data-field="num" data-dir="-1" data-id="${r.id}" title="Decrease numerator by 1">-</button>
-            <input aria-label="${escapeHtml(r.name)} numerator (accepts fraction, decimal, or percent)" data-role="wildcard-num" data-id="${r.id}" type="text" value="${escapeHtml(parts.numRaw)}">
-            <button class="tiny-btn" data-role="wildcard-nudge" data-field="num" data-dir="1" data-id="${r.id}" title="Increase numerator by 1">+</button>
+          <div class="stacked-fraction">
+            <div class="fraction-control">
+              <button class="tiny-btn" data-role="wildcard-nudge" data-field="num" data-dir="-1" data-id="${r.id}" data-lcd="${lcd}" title="Decrease numerator by 1">-</button>
+              <input aria-label="${escapeHtml(r.name || r.shortcode)} numerator" data-role="wildcard-num" data-id="${r.id}" type="text" value="${escapeHtml(parts.numRaw)}" class="wildcard-num-input">
+              <button class="tiny-btn" data-role="wildcard-nudge" data-field="num" data-dir="1" data-id="${r.id}" data-lcd="${lcd}" title="Increase numerator by 1">+</button>
+            </div>
+            <div class="frac-bar"></div>
+            <div class="fraction-control">
+              <button class="tiny-btn" data-role="wildcard-nudge" data-field="den" data-dir="-1" data-id="${r.id}" data-lcd="${lcd}" title="Decrease denominator by 1">-</button>
+              <input aria-label="${escapeHtml(r.name || r.shortcode)} denominator" data-role="wildcard-den" data-id="${r.id}" type="text" value="${escapeHtml(parts.denRaw)}" class="wildcard-den-input">
+              <button class="tiny-btn" data-role="wildcard-nudge" data-field="den" data-dir="1" data-id="${r.id}" data-lcd="${lcd}" title="Increase denominator by 1">+</button>
+            </div>
+            <div class="frac-pct">${pct}</div>
           </div>
         </td>
         <td>
-          <div class="fraction-control">
-            <button class="tiny-btn" data-role="wildcard-nudge" data-field="den" data-dir="-1" data-id="${r.id}" title="Decrease denominator by 1">-</button>
-            <input aria-label="${escapeHtml(r.name)} denominator" data-role="wildcard-den" data-id="${r.id}" type="text" value="${escapeHtml(parts.denRaw)}">
-            <button class="tiny-btn" data-role="wildcard-nudge" data-field="den" data-dir="1" data-id="${r.id}" title="Increase denominator by 1">+</button>
+          <div class="stacked-fraction">
+            <div class="fraction-control">
+              <button class="tiny-btn" data-role="wildcard-nudge" data-field="lcd-num" data-dir="-1" data-id="${r.id}" data-lcd="${lcd}" title="Decrease LCD numerator by 1 (step -1/${lcd})">-</button>
+              <span class="mono lcd-part">${canonical ? lcdNum : "-"}</span>
+              <button class="tiny-btn" data-role="wildcard-nudge" data-field="lcd-num" data-dir="1" data-id="${r.id}" data-lcd="${lcd}" title="Increase LCD numerator by 1 (step +1/${lcd})">+</button>
+            </div>
+            <div class="frac-bar"></div>
+            <div class="fraction-control">
+              <button class="tiny-btn" data-role="wildcard-nudge" data-field="lcd-den" data-dir="-1" data-id="${r.id}" data-lcd="${lcd}" title="Decrease LCD denominator by 1">-</button>
+              <span class="mono lcd-part">${lcd}</span>
+              <button class="tiny-btn" data-role="wildcard-nudge" data-field="lcd-den" data-dir="1" data-id="${r.id}" data-lcd="${lcd}" title="Increase LCD denominator by 1">+</button>
+            </div>
+            <div class="frac-pct">${canonical ? `${(lcdNum / lcd * 100).toFixed(1)}%` : "-"}</div>
           </div>
         </td>
         <td>
-          <label class="pin-wrap"><input type="checkbox" data-role="wildcard-pin" data-id="${r.id}" ${state.ui.nudgePins?.[r.id] ? "checked" : ""}> Pin</label>
+          <div class="stacked-fraction">
+            <span class="mono lcd-part">${canonical ? canonical.n : "-"}</span>
+            <div class="frac-bar"></div>
+            <span class="mono lcd-part">${canonical ? canonical.d : "-"}</span>
+            <div class="frac-pct">${pct}</div>
+          </div>
         </td>
-        <td class="mono">${escapeHtml(decimalDisplay)}</td>
-        <td class="mono">${escapeHtml(fractionDisplay)}</td>
         <td>
-          ${pending ? `<div class="status pending">${pendingText}</div>` : ""}
+          ${pending ? `<div class="status pending">${escapeHtml(pendingText)}</div>` : ""}
         </td>
       `;
       body.appendChild(tr);
@@ -1226,14 +922,17 @@
     state.rules.forEach((rule, idx) => {
       const div = document.createElement("div");
       div.className = "rule-row";
+      div.dataset.ruleId = rule.id;
       const badges = [];
-      if (rule.group && rule.group.includes("fp")) badges.push('<span class="pill fp">Foundational Pair</span>');
-      if (rule.group && rule.group.includes("tc")) badges.push('<span class="pill tc">Tradeoff Cluster</span>');
+      const normalizedGroup = String(rule.group || DEFAULT_RULE_GROUP_BY_ID[rule.id] || "");
+      if (normalizedGroup.includes("fp")) badges.push('<span class="pill fp">Choice 1</span>');
+      if (normalizedGroup.includes("tc")) badges.push('<span class="pill tc">Choice 2</span>');
+      const adviceText = DEFAULT_RULE_ADVICE_BY_ID[rule.id] || rule.advice || "";
       div.innerHTML = `
         <div class="txt">
           <div class="title">${idx + 1}. ${escapeHtml(rule.label)}</div>
-          <div>${badges.join("")}</div>
-          <div class="adv">${escapeHtml(rule.advice)}</div>
+          <div>${badges.join(" ")}</div>
+          <div class="adv">${escapeHtml(adviceText)}</div>
         </div>
         <div class="rule-controls">
           <button data-role="rule-up" data-id="${rule.id}" aria-label="Move ${escapeHtml(rule.label)} up">Up</button>
@@ -1244,22 +943,80 @@
     });
   }
 
+  function captureRuleRowTops() {
+    const tops = new Map();
+    byId("ruleList").querySelectorAll(".rule-row").forEach((row) => {
+      const id = row.dataset.ruleId;
+      if (!id) return;
+      tops.set(id, row.getBoundingClientRect().top);
+    });
+    return tops;
+  }
+
+  function animateRuleReorder(previousTops) {
+    const rows = Array.from(byId("ruleList").querySelectorAll(".rule-row"));
+    rows.forEach((row) => {
+      const id = row.dataset.ruleId;
+      const oldTop = id ? previousTops.get(id) : undefined;
+      if (oldTop == null) return;
+      const newTop = row.getBoundingClientRect().top;
+      const dy = oldTop - newTop;
+      if (Math.abs(dy) < 0.5) return;
+      row.style.willChange = "transform";
+
+      if (typeof row.animate === "function") {
+        const anim = row.animate(
+          [
+            { transform: `translateY(${dy}px)` },
+            { transform: "translateY(0)" }
+          ],
+          {
+            duration: 756,
+            easing: "ease-in-out"
+          }
+        );
+        anim.addEventListener("finish", () => {
+          row.style.willChange = "";
+        });
+      } else {
+        row.style.transition = "none";
+        row.style.transform = `translateY(${dy}px)`;
+        requestAnimationFrame(() => {
+          row.style.transition = "transform 756ms ease-in-out";
+          row.style.transform = "translateY(0)";
+          const cleanup = () => {
+            row.style.transition = "";
+            row.style.transform = "";
+            row.style.willChange = "";
+            row.removeEventListener("transitionend", cleanup);
+          };
+          row.addEventListener("transitionend", cleanup);
+        });
+      }
+    });
+  }
+
   function renderConfigTab() {
     byId("migrationNotice").innerHTML = state.ui.migrationNoticeHtml || "";
   }
 
   function renderFileTab() {
-    byId("pinnedFolderLabel").value = pinnedDirectoryHandle
+    const pathText = pinnedDirectoryHandle
       ? (pinnedFolderDisplayPath || getPinnedFolderDisplayPath(pinnedDirectoryHandle))
       : "No pinned folder";
+    byId("pinnedFolderLabel").value = pathText;
+    byId("pinnedFolderLabel").title = pathText;
+    byId("pinnedFolderPathFull").textContent = pathText;
     const supported = !!window.showDirectoryPicker;
     byId("pickFolderBtn").disabled = !supported;
     byId("clearFolderBtn").disabled = !supported;
 
     if (!supported) {
-      byId("fileModeNotice").innerHTML = statusLine("warn", "File System Access API unavailable. Using download/upload fallback mode.");
+      byId("filesLocalNotice").innerHTML = statusLine("error", "✗ Local file integration is limited in this browser. Using fallback mode only.");
+      byId("fileModeNotice").innerHTML = statusLine("error", "✗ Full file mode unavailable. File System Access API is disabled; pin-folder actions are off.");
     } else {
-      byId("fileModeNotice").innerHTML = statusLine("ok", "Full file mode available. You can pin a folder.");
+      byId("filesLocalNotice").innerHTML = statusLine("ok", "✓ Local data mode active. File read/write stays on your device.");
+      byId("fileModeNotice").innerHTML = statusLine("ok", "✓ Full file mode available. You can pin a folder.");
     }
   }
 
@@ -1313,7 +1070,13 @@
         <li>Packaging parameters and total yield</li>
         <li>Per-card counts: ${state.run.perCardOverrideMode ? "included (override mode enabled)" : "omitted (override mode disabled)"}</li>
       </ul>
+      <p><button class="ghost" id="goToFilesFromSummaryBtn" style="padding:4px 8px;">Go to Files Tab to Export Report &rarr;</button></p>
     `;
+
+    const goToFilesBtn = byId("goToFilesFromSummaryBtn");
+    if (goToFilesBtn) {
+      goToFilesBtn.addEventListener("click", () => setActiveTab("files"));
+    }
   }
 
   function renderErrors(validation) {
@@ -1474,113 +1237,12 @@
     }
   }
 
-  function truncateForUi(value) {
-    const s = typeof value === "string" ? value : JSON.stringify(value);
-    if (s.length <= 120) return s;
-    return `${s.slice(0, 117)}...`;
-  }
-
-  function migrateConfig(input) {
-    const changes = [];
-    const next = makeDefaultState();
-
-    function assign(path, value) {
-      const parts = path.split(".");
-      let target = next;
-      for (let i = 0; i < parts.length - 1; i += 1) target = target[parts[i]];
-      target[parts[parts.length - 1]] = value;
-    }
-
-    function read(path) {
-      const parts = path.split(".");
-      let cur = input;
-      for (const p of parts) {
-        if (cur == null || !(p in cur)) return undefined;
-        cur = cur[p];
-      }
-      return cur;
-    }
-
-    const paths = [
-      "sets", "packs", "ui.editingSetId", "ui.editingPackId",
-      "ui.activeTab", "ui.locale", "ui.probInputMode", "ui.nudgePins",
-      "pack.setId", "pack.cardsPerPack", "pack.packsPerBox", "pack.boxesPerCarton", "pack.slotPlan",
-      "run.packs", "run.roundingPolicy", "rules", "rarities", "packCriteria", "wildcardInputs", "validationDraft"
-    ];
-
-    paths.forEach((path) => {
-      const oldVal = read(path);
-      if (oldVal !== undefined) {
-        assign(path, oldVal);
-      }
-    });
-
-    if (!Array.isArray(next.sets) || next.sets.length === 0) {
-      const legacySet = makeDefaultSet();
-      legacySet.name = read("set.name") || "";
-      legacySet.totalCards = Number(read("set.totalCards") || 0);
-      legacySet.rarities = Array.isArray(read("rarities")) ? clone(read("rarities")) : [];
-      next.sets = [legacySet];
-      next.ui.editingSetId = legacySet.id;
-      next.pack.setId = legacySet.id;
-    }
-    if (!next.validationDraft || typeof next.validationDraft !== "object") next.validationDraft = { wildcardDirty: {}, wildcardPendingInvalid: {} };
-    if (!next.validationDraft.wildcardDirty || typeof next.validationDraft.wildcardDirty !== "object") next.validationDraft.wildcardDirty = {};
-    if (!next.validationDraft.wildcardPendingInvalid || typeof next.validationDraft.wildcardPendingInvalid !== "object") next.validationDraft.wildcardPendingInvalid = {};
-    if (!Array.isArray(next.packs) || next.packs.length === 0) {
-      const legacyPack = makeDefaultPack(next.pack?.setId || next.sets[0].id);
-      legacyPack.cardsPerPack = Number(next.pack.cardsPerPack || legacyPack.cardsPerPack);
-      legacyPack.packsPerBox = Number(next.pack.packsPerBox || legacyPack.packsPerBox);
-      legacyPack.boxesPerCarton = Number(next.pack.boxesPerCarton || legacyPack.boxesPerCarton);
-      legacyPack.slotPlan = Array.isArray(next.pack.slotPlan) ? clone(next.pack.slotPlan) : legacyPack.slotPlan;
-      legacyPack.packCriteria = clone(next.packCriteria || {});
-      legacyPack.wildcardInputs = clone(next.wildcardInputs || {});
-      next.packs = [legacyPack];
-      next.ui.editingPackId = legacyPack.id;
-    }
-    if (!read("pack.slotPlan")) {
-      const legacyWildcardSlots = Number(read("pack.wildcardSlots") || 0);
-      const legacySlots = [];
-      const legacyPackSet = getPackSet(next);
-      (legacyPackSet?.rarities || []).forEach((r) => {
-        const fixed = Number(r.fixedSlots || 0);
-        for (let i = 0; i < fixed; i += 1) legacySlots.push(r.id);
-        next.packCriteria[r.id] = {
-          wildcardEligible: !!r.wildcardEligible,
-          minCopies: Number(r.minCopies || 0),
-          overrideMin: Number(r.overrideMin || 0)
-        };
-      });
-      for (let i = 0; i < legacyWildcardSlots; i += 1) legacySlots.push(WILDCARD_SLOT_ID);
-      next.pack.slotPlan = legacySlots.slice(0, Number(next.pack.cardsPerPack || 0));
-    }
-    ensurePackSelections(next);
-    syncPackLibraryFromActive(next);
-    syncPackConfiguration(next);
-    if (!next.ui.nudgePins || typeof next.ui.nudgePins !== "object") next.ui.nudgePins = {};
-
-    paths.forEach((path) => {
-      const before = read(path);
-      const after = readFromState(next, path);
-      const beforeStr = before === undefined ? "<missing>" : truncateForUi(before);
-      const afterStr = after === undefined ? "<missing>" : truncateForUi(after);
-      if (JSON.stringify(before) !== JSON.stringify(after)) {
-        changes.push(`${path}: ${beforeStr} -> ${afterStr}`);
-      }
-    });
-
-    return { state: next, changes };
-  }
-
-  function readFromState(obj, path) {
-    const parts = path.split(".");
-    let cur = obj;
-    for (const p of parts) {
-      if (cur == null) return undefined;
-      cur = cur[p];
-    }
-    return cur;
-  }
+  window.CCGMigration.init({
+    makeDefaultState, makeDefaultSet, makeDefaultPack, clone,
+    getPackSet, ensurePackSelections, syncPackLibraryFromActive, syncPackConfiguration,
+    WILDCARD_SLOT_ID
+  });
+  const { migrateConfig } = window.CCGMigration;
 
   /* === REPORTING AND EXPORT === */
   function getReportPayloadBuilder() {
@@ -2391,23 +2053,44 @@
     }
 
     const adjustedIds = [targetId].concat(donorRows.map((row) => row.id));
-    let sum = 0;
+    let adjustedSum = 0;
     adjustedIds.forEach((id) => {
       const value = next.get(id);
       if (!Number.isFinite(value) || value < -TOLERANCE || value > 1 + TOLERANCE) {
-        sum = Number.NaN;
+        adjustedSum = Number.NaN;
         return;
       }
-      sum += value;
+      adjustedSum += value;
     });
-    if (!Number.isFinite(sum)) {
+    if (!Number.isFinite(adjustedSum)) {
       return { ok: false, message: "Nudge applied, but redistribution created invalid values. Row is pending-invalid." };
     }
 
-    const remainder = 1 - sum;
+    // Total checks must include pinned rows too; only adjusted rows are mutable.
+    const eligibleProbById = new Map();
+    eligibles.forEach((r) => {
+      const parsed = parseProbabilityInput(state.wildcardInputs[r.id] ?? "0/1", "fraction");
+      eligibleProbById.set(r.id, parsed.ok ? parsed.value : 0);
+    });
+
+    let totalAfter = 0;
+    eligibles.forEach((r) => {
+      const value = next.has(r.id) ? next.get(r.id) : eligibleProbById.get(r.id);
+      if (!Number.isFinite(value) || value < -TOLERANCE || value > 1 + TOLERANCE) {
+        totalAfter = Number.NaN;
+        return;
+      }
+      totalAfter += value;
+    });
+    if (!Number.isFinite(totalAfter)) {
+      return { ok: false, message: "Nudge applied, but redistribution created invalid values. Row is pending-invalid." };
+    }
+
+    const remainder = 1 - totalAfter;
     if (Math.abs(remainder) > TOLERANCE) {
       const rebalanceId = donorRows.length ? donorRows[0].id : targetId;
-      const rebalanceValue = (next.get(rebalanceId) || 0) + remainder;
+      const baseValue = next.has(rebalanceId) ? next.get(rebalanceId) : (eligibleProbById.get(rebalanceId) || 0);
+      const rebalanceValue = baseValue + remainder;
       if (rebalanceValue < -TOLERANCE || rebalanceValue > 1 + TOLERANCE) {
         return { ok: false, message: "Nudge applied, but final rebalance failed. Row is now pending-invalid." };
       }
@@ -2460,7 +2143,7 @@
       return;
     }
 
-    state.wildcardInputs[id] = normalizeProbabilityToFraction(parsed.value).text;
+    // Leave the user's entered fraction as-is; just clear pending flags.
     state.validationDraft.wildcardDirty[id] = false;
     state.validationDraft.wildcardPendingInvalid[id] = false;
     pushHistory("wildcard-commit");
@@ -2475,26 +2158,66 @@
     const id = e.target.dataset.id;
     const field = e.target.dataset.field;
     const dir = Number(e.target.dataset.dir);
-    if (!id || !["num", "den"].includes(field) || !Number.isFinite(dir) || ![-1, 1].includes(dir)) return;
+    if (!id || !["num", "den", "lcd-num", "lcd-den"].includes(field) || !Number.isFinite(dir) || ![-1, 1].includes(dir)) return;
+
+    const lcd = Number(e.target.dataset.lcd);
+    if (!lcd || lcd < 1) return;
 
     if (!state.ui.nudgePins || typeof state.ui.nudgePins !== "object") {
       state.ui.nudgePins = {};
     }
     if (state.ui.nudgePins[id]) {
-      showToast("error", "This rarity is pinned in wildcard controls. Unpin before nudging.");
+      showToast("error", "This rarity is pinned. Unpin before nudging.");
       return;
     }
 
     const parsedBefore = parseProbabilityInput(state.wildcardInputs[id] ?? "0/1", "fraction");
-    const fractionBefore = parsedBefore.ok ? normalizeProbabilityToFraction(parsedBefore.value) : { n: 0, d: 1 };
+    const before = parsedBefore.ok ? parsedBefore.value : 0;
+    const fracBefore = parsedBefore.ok ? normalizeProbabilityToFraction(before) : { n: 0, d: 1 };
 
-    const nextNum = field === "num" ? fractionBefore.n + dir : fractionBefore.n;
-    const nextDen = field === "den" ? fractionBefore.d + dir : fractionBefore.d;
-    state.wildcardInputs[id] = `${nextNum}/${nextDen}`;
+    let newProb;
+    if (field === "num") {
+      const nextN = fracBefore.n + dir;
+      if (nextN < 0) {
+        showToast("error", "Numerator cannot go below 0.");
+        return;
+      }
+      state.wildcardInputs[id] = `${nextN}/${fracBefore.d}`;
+      newProb = nextN / fracBefore.d;
+    } else if (field === "den") {
+      const nextD = fracBefore.d + dir;
+      if (nextD < 1) {
+        showToast("error", "Denominator cannot go below 1.");
+        return;
+      }
+      state.wildcardInputs[id] = `${fracBefore.n}/${nextD}`;
+      newProb = fracBefore.n / nextD;
+    } else if (field === "lcd-num") {
+      const lcdNum = Math.round(before * lcd);
+      const newLcdNum = lcdNum + dir;
+      newProb = newLcdNum / lcd;
+      state.wildcardInputs[id] = normalizeProbabilityToFraction(Math.min(1, Math.max(0, newProb))).text;
+    } else {
+      // lcd-den: change the shared denominator for this row's probability
+      const lcdNum = Math.round(before * lcd);
+      const newDen = lcd + dir;
+      if (newDen < 1) {
+        showToast("error", "LCD denominator cannot go below 1.");
+        return;
+      }
+      newProb = lcdNum / newDen;
+      state.wildcardInputs[id] = normalizeProbabilityToFraction(Math.min(1, Math.max(0, newProb))).text;
+    }
+
+    if (newProb < -TOLERANCE || newProb > 1 + TOLERANCE) {
+      showToast("error", `Nudge would push the value outside [0, 1].`);
+      return;
+    }
+
     state.validationDraft.wildcardDirty[id] = true;
     state.validationDraft.wildcardPendingInvalid[id] = false;
 
-    const redistribute = applyWildcardRedistribution(id, parsedBefore.ok ? parsedBefore.value : 0);
+    const redistribute = applyWildcardRedistribution(id, before);
     if (!redistribute.ok) {
       state.validationDraft.wildcardPendingInvalid[id] = true;
       showToast("error", redistribute.message);
@@ -2518,6 +2241,7 @@
     state.ui.nudgePins[id] = !!e.target.checked;
     pushHistory("wildcard-pin");
     persistState();
+    renderWildcardTable();
   }
 
   function onRuleMove(e) {
@@ -2528,20 +2252,28 @@
     const idx = state.rules.findIndex((r) => r.id === id);
     if (idx < 0) return;
 
+    const previousTops = captureRuleRowTops();
+    let moved = false;
+
     if (role === "rule-up" && idx > 0) {
       const tmp = state.rules[idx - 1];
       state.rules[idx - 1] = state.rules[idx];
       state.rules[idx] = tmp;
+      moved = true;
     }
     if (role === "rule-down" && idx < state.rules.length - 1) {
       const tmp = state.rules[idx + 1];
       state.rules[idx + 1] = state.rules[idx];
       state.rules[idx] = tmp;
+      moved = true;
     }
+
+    if (!moved) return;
 
     pushHistory("rule-reorder");
     persistState();
     renderRules();
+    animateRuleReorder(previousTops);
     scheduleRecalc();
   }
 
@@ -2832,6 +2564,60 @@
     localStorage.setItem(STORAGE_PINNED_DIR_KEY, String(!!window.showDirectoryPicker));
   }
 
+  function applyLicenseGate() {
+    const overlay  = byId("licenseOverlay");
+    const header   = byId("appHeader");
+    const main     = byId("appMain");
+    const accepted = localStorage.getItem(STORAGE_LICENSE_KEY) === "1";
+    if (accepted) {
+      overlay.hidden = true;
+      header.removeAttribute("inert");
+      main.removeAttribute("inert");
+    } else {
+      overlay.hidden = false;
+      header.setAttribute("inert", "");
+      main.setAttribute("inert", "");
+      overlay.querySelector("#licensePersonalBtn").focus();
+    }
+  }
+
+  function bindLicenseGate() {
+    const overlay     = byId("licenseOverlay");
+    const personalBtn = byId("licensePersonalBtn");
+    const buyLink     = byId("licenseBuyLink");
+    const footerLink  = byId("footerLicenseLink");
+    if (!overlay || !personalBtn || !buyLink) return;
+
+    // Wire mailto href on both the modal link and the footer link
+    buyLink.href  = LICENSE_MAILTO;
+    if (footerLink) footerLink.href = LICENSE_MAILTO;
+
+    personalBtn.addEventListener("click", () => {
+      localStorage.setItem(STORAGE_LICENSE_KEY, "1");
+      applyLicenseGate();
+    });
+
+    // "Buy a License" opens the mailto but does NOT dismiss the overlay —
+    // the user must still click "Personal Use" or reload after purchase.
+  }
+
+  function applyGdprNoticeVisibility() {
+    const banner = byId("gdprNoticeBanner");
+    if (!banner) return;
+    const dismissed = localStorage.getItem(STORAGE_GDPR_BANNER_KEY) === "1";
+    banner.hidden = dismissed;
+  }
+
+  function bindGdprNoticeDismiss() {
+    const banner = byId("gdprNoticeBanner");
+    const btn = byId("acceptGdprNoticeBtn");
+    if (!banner || !btn) return;
+    btn.addEventListener("click", () => {
+      banner.hidden = true;
+      localStorage.setItem(STORAGE_GDPR_BANNER_KEY, "1");
+    });
+  }
+
   function applyPrivacyNoticeVisibility() {
     const banner = byId("privacyNoticeBanner");
     if (!banner) return;
@@ -2854,8 +2640,27 @@
     loadPersistedState();
     renderAll();
     bindEvents();
+    bindLicenseGate();
+    applyLicenseGate();
     bindPrivacyNoticeDismiss();
     applyPrivacyNoticeVisibility();
+    bindGdprNoticeDismiss();
+    applyGdprNoticeVisibility();
+
+    byId("showBannersBtn").addEventListener("click", () => {
+      const banners = [
+        { el: byId("privacyNoticeBanner"), key: STORAGE_PRIVACY_BANNER_KEY },
+        { el: byId("gdprNoticeBanner"),    key: STORAGE_GDPR_BANNER_KEY },
+          { el: byId("licenseOverlay"),      key: STORAGE_LICENSE_KEY },
+      ];
+      banners.forEach(({ el, key }) => {
+        if (!el) return;
+        el.hidden = false;
+        localStorage.removeItem(key);
+      });
+        // Re-apply the license gate so inert is restored on header/main
+        applyLicenseGate();
+    });
     checkFeaturesOnce();
     pushHistory("init");
     scheduleRecalc();

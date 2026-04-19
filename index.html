@@ -29,17 +29,43 @@
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-  <header>
+  <div id="licenseOverlay" class="license-overlay" role="dialog" aria-modal="true" aria-label="License agreement">
+    <div class="license-modal status ok">
+      <h2 class="license-title">License &amp; Use</h2>
+      <p class="license-body">Copyright &copy; 2026 Chris Holt. All rights reserved.</p>
+      <p class="license-body">This tool is <strong>free for personal use</strong>. Commercial use requires a license &mdash; $10&nbsp;USD / user / day.</p>
+      <p class="license-body">By continuing you confirm that your use is personal and non-commercial, or that you hold a valid commercial license.</p>
+      <div class="license-actions">
+        <button id="licensePersonalBtn" class="license-btn license-btn-primary" type="button">Personal Use &mdash; Continue</button>
+        <a id="licenseBuyLink" class="license-btn license-btn-ghost" href="#" target="_blank" rel="noopener noreferrer">Buy a License &rarr;</a>
+      </div>
+    </div>
+  </div>
+  <header id="appHeader">
     <h1>CCG Builder</h1>
     <p class="lead">Blank-start configurable calculator with deterministic math, validation guidance, and exportable reports.</p>
     <div id="privacyNoticeBanner" class="status ok privacy-banner" role="note" aria-label="Privacy notice">
       <span>Privacy notice: This tool runs entirely in your browser. Your config data, set data, and calculations are never sent to any server.</span>
       <button id="dismissPrivacyNoticeBtn" class="banner-dismiss" type="button" aria-label="Dismiss privacy notice">Dismiss</button>
     </div>
+    <div id="gdprNoticeBanner" class="status ok gdpr-banner" role="dialog" aria-modal="false" aria-label="Cookie and local storage notice">
+      <div class="gdpr-banner-body">
+        <strong class="gdpr-title">Local Storage Notice</strong>
+        <p class="gdpr-text">This tool stores data exclusively in your browser&rsquo;s <strong>localStorage</strong> &mdash; no cookies, no servers, no tracking. The following keys are written to your device:</p>
+        <ul class="gdpr-list">
+          <li><code>rcpc.packcalc.state</code> &mdash; your active set, pack, and calculator configuration.</li>
+          <li><code>rcpc.packcalc.alerted</code> &mdash; a one-time feature-detection flag.</li>
+          <li><code>rcpc.packcalc.pinnedDirSupported</code> &mdash; whether your browser supports directory pinning.</li>
+          <li><code>rcpc.packcalc.privacyNoticeDismissed</code> &amp; <code>rcpc.packcalc.gdprNoticeDismissed</code> &mdash; your dismissal preferences for these notices.</li>
+        </ul>
+        <p class="gdpr-text">All data remains on your device and is never transmitted. You may clear it at any time via your browser&rsquo;s developer tools. This storage is strictly necessary for the tool to function; no consent is required under GDPR Recital 47, but we disclose it here in the interest of transparency.</p>
+      </div>
+      <button id="acceptGdprNoticeBtn" class="banner-dismiss gdpr-accept" type="button" aria-label="Acknowledge local storage notice">Acknowledge</button>
+    </div>
     <div id="globalAlert" aria-live="polite"></div>
   </header>
 
-  <main>
+  <main id="appMain">
     <div class="main-layout">
       <aside class="card global-action-rail">
         <h2>Action Stack</h2>
@@ -47,6 +73,9 @@
         <div class="actions">
           <button id="undoBtn">Undo</button>
           <button id="redoBtn">Redo</button>
+        </div>
+        <div class="actions">
+          <button class="ghost" id="showBannersBtn" title="Re-show the privacy and cookie notices">Show Notices</button>
         </div>
         <div id="historyStackView" class="history-stack" aria-live="polite"></div>
       </aside>
@@ -226,7 +255,7 @@
 
         <div class="card" id="packBuilderCard">
           <h2>Step 3 - Pack Criteria</h2>
-          <p class="hint">Assign every slot in the pack to a rarity or Wildcard, then set the minimum targets for each rarity.</p>
+          <p class="hint">Assign every slot in the pack to a rarity or Wildcard, then set the minimum targets for each rarity. <em>Min Copies/Pack</em> sets the floor used in normal mode. <em>Override Min</em> replaces it when "Per-Card Override Mode" is active in the Calculator tab.</p>
           <div id="packSlotSummary" class="slot-summary"></div>
           <div id="packSlotGrid" class="slot-grid"></div>
           <div class="table-wrap">
@@ -235,8 +264,8 @@
                 <tr>
                   <th>Rarity</th>
                   <th>Slots in Pack</th>
-                  <th>Rarity Min Copies</th>
-                  <th>Per-Card Override Min</th>
+                  <th title="Minimum number of slots of this rarity that must be filled per pack (in normal mode). The total floor = this value × the rarity's set count.">Min Copies / Pack</th>
+                  <th title="Alternative minimum used when &quot;Per-Card Override Mode&quot; is toggled on in the Calculator tab. Replaces Min Copies / Pack for the floor calculation.">Override Min <abbr aria-label="used only when Per-Card Override Mode is active">(override)</abbr></th>
                 </tr>
               </thead>
               <tbody id="packCriteriaBody"></tbody>
@@ -275,10 +304,9 @@
               <thead>
                 <tr>
                   <th>Rarity</th>
-                  <th>Numerator</th>
-                  <th>Denominator</th>
                   <th>Pin</th>
-                  <th>Decimal</th>
+                  <th>Fraction</th>
+                  <th>LCD</th>
                   <th>Reduced Fraction</th>
                   <th>Status</th>
                 </tr>
@@ -335,7 +363,7 @@
           </div>
         </div>
 
-        <div class="card two-col">
+        <div class="card">
           <div>
             <h2>Detailed Internals</h2>
             <div id="internals"></div>
@@ -353,7 +381,7 @@
         <h2>Priority Rules</h2>
         <p class="hint">Adjust the priority order used when tradeoffs need resolution. This does not change the pack definition, so it lives outside the main calculator workflow.</p>
 
-        <h3>Rule Priority (drag-free keyboard reorder)</h3>
+        <h3>Rule Priority</h3>
         <div id="ruleList" aria-label="Rule priorities"></div>
       </div>
     </section>
@@ -374,44 +402,77 @@
     </section>
 
     <section id="filesTab" class="tab-panel" role="tabpanel" aria-labelledby="tabFiles">
-      <div class="card">
-        <h2>File Operations</h2>
-        <p class="status ok" role="note">Data stays local: File read/write actions use your browser and selected local files/folders only.</p>
-        <div id="fileModeNotice"></div>
+      <div class="grid">
+        <div class="card">
+          <h2>File Picker and Config IO</h2>
+          <div id="filesLocalNotice"></div>
+          <div id="fileModeNotice"></div>
 
-        <div class="row">
-          <div class="field sm-6">
-            <label>Pinned folder (File System Access API)</label>
-            <input id="pinnedFolderLabel" type="text" readonly>
+          <div class="files-howto" role="note" aria-label="File workflow instructions">
+            <h3>Order of Operations</h3>
+            <ol>
+              <li>Set your config filename first.</li>
+              <li>Optional: pick a folder to enable one-click save/open in full file mode.</li>
+              <li>Use Open Config to load, or Save Config to write the current state.</li>
+              <li>After recalculation, use the Report Export section to export report output.</li>
+            </ol>
           </div>
-          <div class="field sm-6">
-            <label>Config/report filename</label>
-            <input id="fileNameInput" type="text" value="pack-config.json">
+
+          <div class="files-subsection">
+            <h3>Step 1 - Name the File</h3>
+            <div class="row">
+              <div class="field sm-12">
+                <label>Config/report filename</label>
+                <input id="fileNameInput" type="text" value="pack-config.json">
+              </div>
+            </div>
+          </div>
+
+          <div class="files-subsection">
+            <h3>Step 2 - Pick Folder (Optional)</h3>
+            <div class="row">
+              <div class="field sm-12">
+                <label>Pinned folder (File System Access API)</label>
+                <input id="pinnedFolderLabel" type="text" readonly>
+                <p id="pinnedFolderPathFull" class="hint mono files-fullpath"></p>
+              </div>
+            </div>
+            <div class="actions files-actions">
+              <button id="pickFolderBtn">Pick Folder</button>
+              <button id="clearFolderBtn" class="ghost">Clear Folder</button>
+            </div>
+          </div>
+
+          <div class="files-subsection">
+            <h3>Step 3 - Config IO</h3>
+            <div class="actions files-actions">
+              <button id="openConfigBtn">Open Config</button>
+              <button id="saveConfigBtn" class="primary">Save Config</button>
+            </div>
           </div>
         </div>
 
-        <div class="actions">
-          <button id="pickFolderBtn">Pick Folder</button>
-          <button id="clearFolderBtn" class="ghost">Clear Folder</button>
-          <button id="saveConfigBtn" class="primary">Save Config</button>
-          <button id="openConfigBtn">Open Config</button>
-        </div>
+        <div class="card">
+          <h2>Report Export</h2>
+          <p class="hint">Export after a successful recalculation so the summary preview and payload are current.</p>
 
-        <hr>
-
-        <h3>Export Report</h3>
-        <div class="row">
-          <div class="field sm-4">
-            <label for="reportFormat">Format</label>
-            <select id="reportFormat">
-              <option value="html">HTML</option>
-              <option value="txt">Plain text</option>
-              <option value="json">JSON</option>
-            </select>
+          <div class="files-subsection">
+            <h3>Step 4 - Choose Format</h3>
+            <div class="row">
+              <div class="field sm-12">
+                <label for="reportFormat">Format</label>
+                <select id="reportFormat">
+                  <option value="html">HTML</option>
+                  <option value="txt">Plain text</option>
+                  <option value="json">JSON</option>
+                </select>
+              </div>
+            </div>
           </div>
-          <div class="field sm-8">
-            <label>Export action</label>
-            <div class="actions">
+
+          <div class="files-subsection">
+            <h3>Step 5 - Export Report</h3>
+            <div class="actions files-actions">
               <button id="exportReportBtn" class="secondary">Export</button>
             </div>
           </div>
@@ -422,6 +483,10 @@
     </div>
   </main>
 
+  <script src="./fraction_math.js"></script>
+  <script src="./validation.js"></script>
+  <script src="./calculator.js"></script>
+  <script src="./migration.js"></script>
   <script src="./report_payload.js"></script>
   <script src="./report_templates.js"></script>
   <script src="./app.js"></script>
@@ -431,7 +496,7 @@
     <span>
       Free for personal use.
       Commercial use requires a license &mdash; $10&nbsp;USD/user/day.
-      <a href="mailto:license@cipherfall.com?subject=Commercial%20License%20Request%20%E2%80%94%20CCG%20Builder&body=Hello%2C%0A%0AI%20would%20like%20to%20obtain%20a%20commercial%20license%20for%20CCG%20Builder.%0A%0AOrganization%20name%3A%20%5Byour%20organization%5D%0ANumber%20of%20users%3A%20%5Bnumber%5D%0AEstimated%20days%20of%20use%3A%20%5Bnumber%5D%0AUse%20case%20description%3A%20%5Bdescribe%20how%20you%20intend%20to%20use%20the%20tool%5D%0A%0APlease%20reply%20with%20licensing%20terms%20and%20payment%20instructions.%0A%0AThank%20you." target="_blank" rel="noopener noreferrer">Obtain a commercial license &rarr;</a>
+      <a id="footerLicenseLink" href="#" target="_blank" rel="noopener noreferrer">Obtain a commercial license &rarr;</a>
     </span>
   </footer>
 </body>

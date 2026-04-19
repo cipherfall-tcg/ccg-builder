@@ -108,9 +108,11 @@
 1. The wildcard input mode is fixed to fraction-first. The `probInputMode` selector is disabled in the UI.
 2. Inputs accept: integer fraction `a/b`, decimal (e.g. `0.25`), or percent (e.g. `25%`).
 3. Values entered as decimal > 1 are interpreted as percent (e.g. `25` → `0.25`).
-4. On blur, valid inputs are normalized to a reduced integer fraction using GCD reduction. Decimals and percents are converted via best-fit fraction approximation with denominator cap of 9999.
-5. During typing, values are stored as-is and marked dirty (pending state). The running total updates live.
-6. Fractions must have non-negative integer numerator and denominator; denominator cannot be zero; value must be ≤ 1.
+4. On blur, if the input is valid the dirty flag is cleared but the entered fraction is **not** reduced or rewritten — the user's exact text is preserved in the numerator/denominator fields.
+5. Decimals and percents entered by the user are accepted as input but the stored value is their exact typed text; the reduced form is shown separately in the Reduced Fraction display column.
+6. During typing, values are stored as-is and marked dirty (pending state). The running total updates live.
+7. Fractions must have non-negative integer numerator and denominator; denominator cannot be zero; value must be ≤ 1.
+8. The decimal display column has been removed. Probability is shown exclusively in fraction form.
 
 ### Sum Constraint
 1. Probabilities across all eligible rarities must sum to 1.0 within TOLERANCE (1e-9; blocking error if violated).
@@ -121,22 +123,32 @@
 2. A row with an invalid value after commit, or one that failed redistribution, shows "Pending-invalid".
 3. Validation only blocks calculation on blur or explicit recalculate — not while typing.
 
+### Table Column Layout
+The wildcard table columns are, in order: **Rarity | Pin | Numerator | Denominator | LCD | Reduced Fraction | Status**.
+
 ### Numerator/Denominator Controls
-1. Each eligible rarity row has separate numerator and denominator text inputs.
-2. Each field has ±1 nudge buttons (integers only; nudge applies to the current reduced fraction's n or d).
-3. When a nudge is applied, the app attempts to redistribute the probability delta across all unpinned eligible rows to preserve sum=1.
+1. Each eligible rarity row has separate numerator and denominator plain-text inputs.
+2. These fields have no nudge buttons. The user types values directly; the displayed LCD and Reduced Fraction columns update on commit.
+
+### LCD Column
+1. The Least Common Denominator (LCD) is computed across all currently valid eligible rows: the LCM of all reduced denominators.
+2. Each row shows its probability expressed as `numerator/LCD`, giving a uniform denominator so all rows can be visually compared at a glance.
+3. The ±1 nudge buttons in the LCD column adjust the row's LCD-numerator by 1 step (i.e. the probability changes by exactly `1/LCD`).
+4. After a nudge the app redistributes the probability delta proportionally among all unpinned eligible rows to preserve sum=1.
+5. If the nudge would push the row outside [0, 1] before redistribution, it is blocked with a toast.
 
 ### Pin Controls
-1. Each eligible rarity row has a "Pin" checkbox.
-2. Pinned rows are excluded from redistribution when other rows are nudged.
-3. Nudging a pinned row is blocked; a toast is shown.
+1. Each eligible rarity row has a dedicated **Pin** column containing a checkbox.
+2. When a row is pinned, the entire table row receives an amber background tint and a left-border accent to make the pinned state visually prominent at a glance.
+3. Pinned rows are excluded from redistribution when other rows are nudged.
+4. Nudging a pinned row is blocked; a toast is shown.
 
 ### Redistribution Algorithm
 1. When a target row increases probability by delta, the delta is deducted from unpinned donor rows proportionally to their current probability values.
 2. When a target row decreases probability by delta, the delta is distributed to unpinned donor rows proportionally to their available room (1 − current probability).
 3. A final rebalance pass corrects any floating-point remainder, applied to the first donor.
 4. If redistribution is mathematically impossible (no donors, insufficient donor mass, no room), the nudge remains applied to the target row, the row is marked pending-invalid, and a toast notification informs the user of the specific reason.
-5. After successful redistribution, all adjusted rows are normalized to reduced fractions and their dirty/pending-invalid flags are cleared.
+5. After successful redistribution, all adjusted rows are normalized to reduced fractions internally (stored as canonical `n/d`), their dirty/pending-invalid flags are cleared, and the LCD and Reduced Fraction display columns update.
 
 ### Snap to Tolerance
 1. "Snap to Tolerance" adjusts the highest-probability eligible row by the current sum remainder to force the total exactly to 1.0.
