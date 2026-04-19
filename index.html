@@ -1,0 +1,420 @@
+<!doctype html>
+<!--
+  CCG Builder
+  Copyright © 2026 Chris Holt. All rights reserved.
+
+  LICENSE SUMMARY
+  Personal use: Free.
+  Commercial use: Requires a paid license — $10 USD per user per day.
+    To obtain a commercial license, contact license@cipherfall.com.
+
+  Full terms:
+  1. All intellectual property rights in this software are retained by Chris Holt.
+  2. Personal, non-commercial use is permitted at no cost.
+  3. Commercial use — including but not limited to use in a business context,
+     use to generate revenue, or deployment for employees or clients — requires
+     a written commercial license obtained from the copyright holder.
+  4. No derivative works, modifications, redistribution, or sublicensing of this
+     software or its source code are permitted without prior written consent.
+  5. This notice must be retained in any permitted copy.
+
+  Commercial licensing: license@cipherfall.com
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CCG Builder</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header>
+    <h1>CCG Builder</h1>
+    <p class="lead">Blank-start configurable calculator with deterministic math, validation guidance, and exportable reports.</p>
+    <div id="globalAlert" aria-live="polite"></div>
+  </header>
+
+  <main>
+    <div class="main-layout">
+      <aside class="card global-action-rail">
+        <h2>Action Stack</h2>
+        <p class="hint">Recent actions are shown top-first. Active state is highlighted.</p>
+        <div class="actions">
+          <button id="undoBtn">Undo</button>
+          <button id="redoBtn">Redo</button>
+        </div>
+        <div id="historyStackView" class="history-stack" aria-live="polite"></div>
+      </aside>
+
+      <div class="main-content">
+    <div class="tabs" role="tablist" aria-label="Main tabs">
+      <button class="tab-btn" id="tabWelcome" role="tab" aria-selected="true" aria-controls="welcomeTab">Welcome</button>
+      <button class="tab-btn" id="tabRarities" role="tab" aria-selected="false" aria-controls="raritiesTab">Set Editor</button>
+      <button class="tab-btn" id="tabPackEditor" role="tab" aria-selected="false" aria-controls="packEditorTab">Pack Editor</button>
+      <button class="tab-btn" id="tabRules" role="tab" aria-selected="false" aria-controls="rulesTab">Priority Rules</button>
+      <button class="tab-btn" id="tabCalculator" role="tab" aria-selected="false" aria-controls="calculatorTab">Calculator</button>
+      <button class="tab-btn" id="tabConfig" role="tab" aria-selected="false" aria-controls="configTab">Config Manager</button>
+      <button class="tab-btn" id="tabFiles" role="tab" aria-selected="false" aria-controls="filesTab">Files</button>
+    </div>
+
+    <section id="welcomeTab" class="tab-panel active" role="tabpanel" aria-labelledby="tabWelcome">
+      <div class="card">
+        <h2>Welcome</h2>
+        <p class="hint">Use this guide to follow the intended workflow for defining sets, building packs, running calculations, and exporting deliverables.</p>
+
+        <h3>Recommended Workflow</h3>
+        <ol>
+          <li>Set Editor: Create or load a set, then define set name, total card count, and rarity rows.</li>
+          <li>Pack Editor: Create or load a pack, assign the pack to a set, then define packaging, slot plan, criteria, and wildcard ratios.</li>
+          <li>Priority Rules: Tune rule ordering to control tradeoff resolution behavior.</li>
+          <li>Calculator: Choose run size, solve for packaging barriers if needed, and recalculate.</li>
+          <li>Files + Config Manager: Save/load configurations and export final reports.</li>
+        </ol>
+
+        <h3>Action Stack</h3>
+        <p>The Action Stack appears on the left when there is enough room. It shows recent changes top-first and highlights the active snapshot. Use Undo/Redo to move through history states safely.</p>
+
+        <h3>Config Data (Load/Save)</h3>
+        <ul>
+          <li>Config Manager tab: Generate JSON from the current app state or load pasted JSON with migration support.</li>
+          <li>Files tab: Save config to disk, open config from disk, and keep data portable between sessions.</li>
+          <li>Autosave: The app also keeps current state in browser storage for quick resume.</li>
+        </ul>
+
+        <h3>File Access</h3>
+        <ul>
+          <li>If your browser supports File System Access API, you can pick and use a pinned folder.</li>
+          <li>If unsupported, the app falls back to standard download/upload behavior.</li>
+          <li>Use clear, versioned filenames to track milestones for sets and pack definitions.</li>
+        </ul>
+
+        <h3>Report Tools</h3>
+        <ul>
+          <li>Export reports in HTML, plain text, or JSON from the Files tab.</li>
+          <li>Reports include active pack and set context, rarity totals, wildcard rules, pack definition, and priority rules.</li>
+          <li>Run Recalculate before export to ensure report data reflects current validation and math results.</li>
+        </ul>
+
+        <h3>License and Copyright</h3>
+        <p>Copyright &copy; 2026 Chris Holt. All rights reserved. Personal use is free. Commercial use requires a paid license at $10 USD per user per day. See footer link for commercial licensing contact details.</p>
+      </div>
+    </section>
+
+    <section id="raritiesTab" class="tab-panel" role="tabpanel" aria-labelledby="tabRarities">
+      <div class="card">
+        <h2>Set Editor</h2>
+        <p class="hint">Define one or more sets, then edit the active set's metadata and rarity breakdown here. Pack definitions are associated to a selected set in Pack Editor.</p>
+        <h3 id="setActiveTitle">Active Set: Untitled Set</h3>
+        <div class="row">
+          <div class="field sm-6">
+            <label for="setPickerSelect">Set picker</label>
+            <select id="setPickerSelect"></select>
+          </div>
+          <div class="field sm-6">
+            <label>Set actions</label>
+            <div class="actions">
+              <button id="loadSetBtn">Load Set</button>
+              <button id="createSetBtn" class="secondary">Create Set</button>
+              <button id="removeSetBtn" class="ghost">Remove Set</button>
+            </div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field sm-8">
+            <label for="setName">Set name</label>
+            <input id="setName" type="text" placeholder="Example: Alpha Core">
+          </div>
+          <div class="field sm-4">
+            <label for="setTotalCards">Total cards in set</label>
+            <input id="setTotalCards" type="number" min="1" step="1">
+          </div>
+        </div>
+        <div id="setDistributionStatus"></div>
+        <div class="table-wrap">
+          <table aria-label="Rarity definitions">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Shortcode</th>
+                <th>Set Cards</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="rarityBody"></tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button id="addRarityBtn" class="secondary">Add Rarity</button>
+          <button id="resetRaritiesBtn" class="ghost">Reset Rarities</button>
+        </div>
+        <div id="rarityTabPrompt" class="empty-start" style="margin-top:10px;"></div>
+      </div>
+    </section>
+
+    <section id="packEditorTab" class="tab-panel" role="tabpanel" aria-labelledby="tabPackEditor">
+      <div class="card">
+        <h2>Step 1 - Pack Selection</h2>
+        <p class="hint">Select the pack you want to edit. A single set can support multiple pack definitions, and each pack can target a different set.</p>
+        <h3 id="packActiveTitle">Active Pack: Untitled Pack</h3>
+        <div class="row">
+          <div class="field sm-4">
+            <label for="packPickerSelect">Pack picker</label>
+            <select id="packPickerSelect"></select>
+          </div>
+          <div class="field sm-4">
+            <label for="packName">Pack name</label>
+            <input id="packName" type="text" placeholder="Example: Standard Booster">
+          </div>
+          <div class="field sm-4">
+            <label for="packSetSelect">Pack set</label>
+            <select id="packSetSelect"></select>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field sm-6">
+            <label>Pack actions</label>
+            <div class="actions">
+              <button id="loadPackBtn">Load Pack</button>
+              <button id="createPackBtn" class="secondary">Create Pack</button>
+              <button id="removePackBtn" class="ghost">Remove Pack</button>
+            </div>
+          </div>
+          <div class="field sm-6">
+            <label>Copy current rules to new pack</label>
+            <div class="actions">
+              <select id="copyPackSetSelect" aria-label="Target set for copied pack"></select>
+              <button id="copyPackToNewBtn">Copy to New Pack</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h2>Step 2 - Pack Composition and Packaging</h2>
+          <div class="row">
+            <div class="field sm-4">
+              <label for="cardsPerPack">Cards per pack (1-15)</label>
+              <input id="cardsPerPack" type="number" min="1" max="15" step="1">
+            </div>
+            <div class="field sm-4">
+              <label for="packsPerBox">Packs per box</label>
+              <input id="packsPerBox" type="number" min="1" step="1">
+            </div>
+            <div class="field sm-4">
+              <label for="boxesPerCarton">Boxes per carton</label>
+              <input id="boxesPerCarton" type="number" min="1" step="1">
+            </div>
+          </div>
+          <p class="hint">Card slots and wildcard quantity are defined in the next step by building the pack tile-by-tile.</p>
+          <div class="actions">
+            <button class="ghost" id="resetPackagingBtn">Reset Packaging</button>
+          </div>
+        </div>
+
+        <div class="card" id="packBuilderCard">
+          <h2>Step 3 - Pack Criteria</h2>
+          <p class="hint">Assign every slot in the pack to a rarity or Wildcard, then set the minimum targets for each rarity.</p>
+          <div id="packSlotSummary" class="slot-summary"></div>
+          <div id="packSlotGrid" class="slot-grid"></div>
+          <div class="table-wrap">
+            <table aria-label="Pack criteria by rarity">
+              <thead>
+                <tr>
+                  <th>Rarity</th>
+                  <th>Slots in Pack</th>
+                  <th>Rarity Min Copies</th>
+                  <th>Per-Card Override Min</th>
+                </tr>
+              </thead>
+              <tbody id="packCriteriaBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card" id="wildcardCard">
+          <h2>Step 4 - Wildcard Ratios</h2>
+          <p class="hint">Enable wildcard-eligible rarities here. Only enabled rarities get probability line items below.</p>
+          <div class="row">
+            <div class="field sm-4">
+              <label for="probInputMode">Probability input mode</label>
+              <select id="probInputMode">
+                <option value="decimal">Decimal</option>
+                <option value="fraction">Fraction a/b</option>
+              </select>
+            </div>
+            <div class="field sm-4">
+              <label for="localeSelect">Number format locale</label>
+              <select id="localeSelect"></select>
+            </div>
+            <div class="field sm-4">
+              <label for="roundingPolicy">Rounding policy</label>
+              <select id="roundingPolicy">
+                <option value="exact">Preserve exact total cards</option>
+                <option value="drift">Minimum rarity drift</option>
+                <option value="strict">Strict per-rarity bounds</option>
+              </select>
+            </div>
+          </div>
+          <div id="wildcardEligibilityList"></div>
+          <div id="wildcardNotice"></div>
+          <div id="wildcardRunningTotal"></div>
+          <div class="table-wrap">
+            <table aria-label="Wildcard ratios">
+              <thead>
+                <tr>
+                  <th>Rarity</th>
+                  <th>Probability Input</th>
+                  <th>Decimal</th>
+                  <th>Reduced Fraction</th>
+                </tr>
+              </thead>
+              <tbody id="wildcardBody"></tbody>
+            </table>
+          </div>
+          <div class="actions">
+            <button id="snapToleranceBtn">Snap to Tolerance</button>
+            <button class="ghost" id="resetWildcardBtn">Reset Wildcards</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="calculatorTab" class="tab-panel" role="tabpanel" aria-labelledby="tabCalculator">
+      <div id="errorSummary" tabindex="-1" aria-live="polite"></div>
+
+      <div id="emptyPrompt" class="empty-start">
+        <strong>Getting started:</strong> first define a set in the <button class="ghost" style="padding:0 4px;font-size:inherit;" id="goToRaritiesBtn">Set Editor tab</button>, then configure pack rules in the <button class="ghost" style="padding:0 4px;font-size:inherit;" id="goToPackEditorBtn">Pack Editor tab</button> before running calculations here.
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h2>Run Controls</h2>
+          <div class="row">
+            <div class="field sm-3">
+              <label for="runPacks">Run size (packs)</label>
+              <input id="runPacks" type="number" min="1" step="1">
+            </div>
+            <div class="field sm-3">
+              <label for="calcStatus">Calculation state</label>
+              <input id="calcStatus" type="text" readonly>
+            </div>
+            <div class="field sm-3">
+              <label for="perCardOverrideMode">Per-card override mode</label>
+              <input id="perCardOverrideMode" type="checkbox" aria-label="Enable per-card override minimum enforcement">
+              <p class="hint">When enabled, strict policy uses per-card override minimums instead of rarity-level minimums.</p>
+            </div>
+            <div class="field sm-3">
+              <label>Quick solve</label>
+              <div class="actions">
+                <button id="solveSmallest">Smallest Run</button>
+                <button id="solveBox">One Box Barrier</button>
+                <button id="solveCarton">One Carton Barrier</button>
+                <button id="solveSnap">Snap Current to Barrier</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button class="primary" id="recalcBtn">Recalculate</button>
+            <button class="ghost" id="resetAllBtn">Reset All</button>
+          </div>
+        </div>
+
+        <div class="card two-col">
+          <div>
+            <h2>Detailed Internals</h2>
+            <div id="internals"></div>
+          </div>
+          <div>
+            <h2>Summary Report Preview</h2>
+            <div id="summary"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="rulesTab" class="tab-panel" role="tabpanel" aria-labelledby="tabRules">
+      <div class="card">
+        <h2>Priority Rules</h2>
+        <p class="hint">Adjust the priority order used when tradeoffs need resolution. This does not change the pack definition, so it lives outside the main calculator workflow.</p>
+
+        <h3>Rule Priority (drag-free keyboard reorder)</h3>
+        <div id="ruleList" aria-label="Rule priorities"></div>
+      </div>
+    </section>
+
+    <section id="configTab" class="tab-panel" role="tabpanel" aria-labelledby="tabConfig">
+      <div class="card">
+        <h2>Config Manager</h2>
+        <p class="hint">Export/import full state with schema migration support and field-by-field migration notices.</p>
+        <textarea id="configJson" aria-label="Configuration JSON"></textarea>
+        <div class="actions">
+          <button id="generateJsonBtn" class="secondary">Generate JSON</button>
+          <button id="loadJsonBtn" class="primary">Load JSON</button>
+          <button id="clearJsonBtn" class="ghost">Clear</button>
+        </div>
+        <div id="migrationNotice"></div>
+      </div>
+    </section>
+
+    <section id="filesTab" class="tab-panel" role="tabpanel" aria-labelledby="tabFiles">
+      <div class="card">
+        <h2>File Operations</h2>
+        <div id="fileModeNotice"></div>
+
+        <div class="row">
+          <div class="field sm-6">
+            <label>Pinned folder (File System Access API)</label>
+            <input id="pinnedFolderLabel" type="text" readonly>
+          </div>
+          <div class="field sm-6">
+            <label>Config/report filename</label>
+            <input id="fileNameInput" type="text" value="pack-config.json">
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="pickFolderBtn">Pick Folder</button>
+          <button id="clearFolderBtn" class="ghost">Clear Folder</button>
+          <button id="saveConfigBtn" class="primary">Save Config</button>
+          <button id="openConfigBtn">Open Config</button>
+        </div>
+
+        <hr>
+
+        <h3>Export Report</h3>
+        <div class="row">
+          <div class="field sm-4">
+            <label for="reportFormat">Format</label>
+            <select id="reportFormat">
+              <option value="html">HTML</option>
+              <option value="txt">Plain text</option>
+              <option value="json">JSON</option>
+            </select>
+          </div>
+          <div class="field sm-8">
+            <label>Export action</label>
+            <div class="actions">
+              <button id="exportReportBtn" class="secondary">Export</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+      </div>
+    </div>
+  </main>
+
+  <script src="./app.js"></script>
+
+  <footer>
+    <span>Copyright &copy; 2026 Chris Holt. All rights reserved.</span>
+    <span>
+      Free for personal use.
+      Commercial use requires a license &mdash; $10&nbsp;USD/user/day.
+      <a href="mailto:license@cipherfall.com?subject=Commercial%20License%20Request%20%E2%80%94%20CCG%20Builder&body=Hello%2C%0A%0AI%20would%20like%20to%20obtain%20a%20commercial%20license%20for%20CCG%20Builder.%0A%0AOrganization%20name%3A%20%5Byour%20organization%5D%0ANumber%20of%20users%3A%20%5Bnumber%5D%0AEstimated%20days%20of%20use%3A%20%5Bnumber%5D%0AUse%20case%20description%3A%20%5Bdescribe%20how%20you%20intend%20to%20use%20the%20tool%5D%0A%0APlease%20reply%20with%20licensing%20terms%20and%20payment%20instructions.%0A%0AThank%20you." target="_blank" rel="noopener noreferrer">Obtain a commercial license &rarr;</a>
+    </span>
+  </footer>
+</body>
+</html>

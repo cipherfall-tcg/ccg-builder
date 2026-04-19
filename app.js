@@ -1,0 +1,2890 @@
+
+  /* === CONSTANTS AND DEFAULTS === */
+  const APP_VERSION = "0.1.0";
+  const SCHEMA_VERSION = 1;
+  const STORAGE_KEY = "rcpc.packcalc.state";
+  const STORAGE_ALERT_KEY = "rcpc.packcalc.alerted";
+  const STORAGE_PINNED_DIR_KEY = "rcpc.packcalc.pinnedDirSupported";
+  const TOLERANCE = 1e-9;
+  const FRACTION_DENOM_CAP = 9999;
+  const MAX_JSON_BYTES = 5 * 1024 * 1024;
+  const MAX_RARITY_COUNT = 127;
+  const HISTORY_LIMIT = 50;
+  const WILDCARD_SLOT_ID = "__wildcard__";
+
+  const LOCALES = ["en-US", "en-GB", "fr-FR", "de-DE", "es-ES", "it-IT", "pt-BR", "ja-JP", "ko-KR", "zh-CN", "nl-NL"];
+
+  const DEFAULT_RULES = [
+    { id: "packComposition", label: "Respect cards-per-pack composition", group: "fp", advice: "Foundational Pair: locks slot integrity." },
+    { id: "productionRanges", label: "Prefer recommended production ranges", group: null, advice: "Treat as soft guardrails unless explicitly overridden." },
+    { id: "packagingBarrier", label: "Snap run to packaging barriers", group: null, advice: "Maintains operational packaging consistency." },
+    { id: "perCardOverride", label: "Enforce explicit per-card overrides", group: null, advice: "Override mode only when enabled." },
+    { id: "minRun", label: "Minimize print run size", group: null, advice: "Favors least material usage under constraints." },
+    { id: "wildcardDistribution", label: "Match wildcard long-run distribution", group: null, advice: "Keeps expected wildcard yields aligned." },
+    { id: "exactTotal", label: "Preserve exact total card count", group: "fp tc", advice: "Foundational + Tradeoff: exact total may increase drift pressure." },
+    { id: "rarityDrift", label: "Keep rarity drift low", group: "tc", advice: "Tradeoff Cluster: lower drift may compete with strict bounds." },
+    { id: "rarityMins", label: "Enforce rarity-level per-card minimums", group: null, advice: "Applies by rarity by default." },
+    { id: "strictBounds", label: "Respect strict per-rarity min/max bounds", group: "tc", advice: "Tradeoff Cluster: strict bounds can force larger drift." }
+  ];
+
+  function generateId(prefix) {
+    return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  }
+
+  function makeDefaultSet(id = generateId("set")) {
+    return {
+      id,
+      name: "",
+      totalCards: 0,
+      rarities: []
+    };
+  }
+
+  function makeDefaultPack(setId, id = generateId("pack")) {
+    return {
+      id,
+      name: "",
+      setId,
+      cardsPerPack: 10,
+      packsPerBox: 36,
+      boxesPerCarton: 6,
+      slotPlan: Array.from({ length: 10 }, () => ""),
+      packCriteria: {},
+      wildcardInputs: {}
+    };
+  }
+
+  function makeDefaultState() {
+    const initialSet = makeDefaultSet();
+    const initialPack = makeDefaultPack(initialSet.id);
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      metadata: {
+        appVersion: APP_VERSION,
+        timestamp: new Date().toISOString()
+      },
+      sets: [initialSet],
+      packs: [initialPack],
+      ui: {
+        activeTab: "welcome",
+        editingSetId: initialSet.id,
+        editingPackId: initialPack.id,
+        locale: "en-US",
+        probInputMode: "decimal",
+        nudgePins: {},
+        migrationNoticeHtml: ""
+      },
+      pack: {
+        setId: initialPack.setId,
+        cardsPerPack: initialPack.cardsPerPack,
+        packsPerBox: initialPack.packsPerBox,
+        boxesPerCarton: initialPack.boxesPerCarton,
+        slotPlan: clone(initialPack.slotPlan)
+      },
+      run: {
+        packs: 216,
+        roundingPolicy: "exact",
+        perCardOverrideMode: false
+      },
+      rules: DEFAULT_RULES.map((r) => ({ ...r })),
+      rarities: [],
+      packCriteria: clone(initialPack.packCriteria),
+      wildcardInputs: clone(initialPack.wildcardInputs),
+      pinnedFolderReady: false,
+      validationDraft: {
+        wildcardDirty: {}
+      }
+    };
+  }
+
+  /* === STATE, HISTORY, AND UTILITIES === */
+  let state = makeDefaultState();
+  let historyStack = [];
+  let historyCursor = -1;
+  let calcToken = 0;
+  let pinnedDirectoryHandle = null;
+  let pinnedFolderDisplayPath = "";
+  let lastExplicitFileSyncHash = null;
+
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function formatNumber(n) {
+    const loc = state.ui.locale || "en-US";
+    try {
+      return new Intl.NumberFormat(loc, { maximumFractionDigits: 6 }).format(n);
+    } catch (_e) {
+      return String(n);
+    }
+  }
+
+  function statusLine(type, text) {
+    return `<div class="status ${type}" role="status">${escapeHtml(text)}</div>`;
+  }
+
+  function escapeHtml(text) {
+    return String(text)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  }
+
+  function getPinnedFolderDisplayPath(handle) {
+    if (!handle) return "";
+    if (typeof handle.path === "string" && handle.path.trim()) return handle.path.trim();
+    if (typeof handle.name === "string" && handle.name.trim()) return handle.name.trim();
+    return "Pinned folder selected";
+  }
+
+  function utf8ByteLength(text) {
+    return new TextEncoder().encode(text).length;
+  }
+
+  function normalizedStateHash() {
+    const cloned = clone(state);
+    if (cloned.metadata) {
+      cloned.metadata.timestamp = "";
+    }
+    return JSON.stringify(cloned);
+  }
+
+  function maybeConfirmUnsavedBeforeOpen() {
+    if (!lastExplicitFileSyncHash) return true;
+    if (lastExplicitFileSyncHash === normalizedStateHash()) return true;
+    return window.confirm("You have unsaved local changes since your last explicit save/load. Open anyway and replace current state?");
+  }
+
+  function pushHistory(reason) {
+    syncPackLibraryFromActive(state);
+    const snapshot = clone(state);
+    if (historyCursor >= 0) {
+      const current = JSON.stringify(historyStack[historyCursor].snapshot);
+      const next = JSON.stringify(snapshot);
+      if (current === next) return;
+    }
+    historyStack = historyStack.slice(0, historyCursor + 1);
+    historyStack.push({ snapshot, label: historyLabel(reason) });
+    if (historyStack.length > HISTORY_LIMIT) {
+      historyStack.shift();
+    }
+    historyCursor = historyStack.length - 1;
+    void reason;
+    renderUndoRedo();
+  }
+
+  function undo() {
+    if (historyCursor <= 0) return;
+    historyCursor -= 1;
+    state = clone(historyStack[historyCursor].snapshot);
+    persistState();
+    renderAll();
+    scheduleRecalc();
+  }
+
+  function redo() {
+    if (historyCursor >= historyStack.length - 1) return;
+    historyCursor += 1;
+    state = clone(historyStack[historyCursor].snapshot);
+    persistState();
+    renderAll();
+    scheduleRecalc();
+  }
+
+  function historyLabel(reason) {
+    const labels = {
+      init: "Initialize",
+      "set-commit": "Set Edit",
+      "pack-set-change": "Set Link",
+      "pack-select": "Pack Select",
+      "pack-name-commit": "Pack Name",
+      "add-pack": "Add Pack",
+      "remove-pack": "Remove Pack",
+      "copy-pack": "Copy Pack",
+      "add-set": "Add Set",
+      "remove-set": "Remove Set",
+      "add-rarity": "Add Rarity",
+      "reset-rarities": "Reset Rarities",
+      "rarity-commit": "Rarity Edit",
+      "rarity-delete": "Delete Rarity",
+      "pack-commit": "Pack Edit",
+      "pack-slot-change": "Slot Update",
+      "pack-criteria-commit": "Criteria Edit",
+      "wildcard-eligibility": "Wildcard Toggle",
+      "wildcard-commit": "Wildcard Edit",
+      "rounding-policy": "Rounding Mode",
+      "per-card-override-mode": "Override Mode",
+      "prob-mode": "Input Mode",
+      locale: "Locale",
+      "rule-reorder": "Rule Order",
+      "snap-tolerance": "Snap Tolerance",
+      "solve-smallest": "Smallest Run",
+      "solve-box": "Box Barrier",
+      "solve-carton": "Carton Barrier",
+      "solve-snap": "Snap Barrier",
+      "nudge-per-card": "Per-Card Nudge",
+      "reset-packaging": "Reset Pack",
+      "reset-wildcards": "Reset Wildcards",
+      "reset-all": "Reset All",
+      "load-json": "Load Config"
+    };
+    return labels[reason] || "State Edit";
+  }
+
+  function renderHistoryStack() {
+    const box = byId("historyStackView");
+    if (!box) return;
+    if (!historyStack.length) {
+      box.innerHTML = '<div class="history-empty">No actions yet.</div>';
+      return;
+    }
+
+    const rows = historyStack.map((entry, idx) => {
+      const classes = ["history-item"];
+      if (idx === historyCursor) classes.push("active");
+      if (idx > historyCursor) classes.push("redo");
+      return `<div class="${classes.join(" ")}" title="${escapeHtml(entry.label)}">${escapeHtml(entry.label)}</div>`;
+    }).reverse().join("");
+
+    box.innerHTML = rows;
+  }
+
+  function renderUndoRedo() {
+    byId("undoBtn").disabled = historyCursor <= 0;
+    byId("redoBtn").disabled = historyCursor >= historyStack.length - 1;
+    renderHistoryStack();
+  }
+
+  function byId(id) {
+    return document.getElementById(id);
+  }
+
+  function getSetById(sourceState, setId) {
+    return (sourceState.sets || []).find((setDef) => setDef.id === setId) || null;
+  }
+
+  function ensureSetSelections(targetState = state) {
+    if (!Array.isArray(targetState.sets) || targetState.sets.length === 0) {
+      const fallback = makeDefaultSet();
+      targetState.sets = [fallback];
+    }
+
+    const firstSetId = targetState.sets[0].id;
+    if (!targetState.ui || typeof targetState.ui !== "object") {
+      targetState.ui = { activeTab: "welcome", editingSetId: firstSetId, editingPackId: "", locale: "en-US", probInputMode: "decimal", nudgePins: {}, migrationNoticeHtml: "" };
+    }
+    if (!targetState.pack || typeof targetState.pack !== "object") {
+      targetState.pack = { setId: firstSetId, cardsPerPack: 10, packsPerBox: 36, boxesPerCarton: 6, slotPlan: [] };
+    }
+
+    if (!getSetById(targetState, targetState.ui.editingSetId)) {
+      targetState.ui.editingSetId = firstSetId;
+    }
+    if (!getSetById(targetState, targetState.pack.setId)) {
+      targetState.pack.setId = firstSetId;
+    }
+    if (!targetState.ui.nudgePins || typeof targetState.ui.nudgePins !== "object") {
+      targetState.ui.nudgePins = {};
+    }
+  }
+
+  function normalizePackRecord(packRecord, fallbackSetId) {
+    const normalized = {
+      id: packRecord?.id || generateId("pack"),
+      name: String(packRecord?.name || ""),
+      setId: packRecord?.setId || fallbackSetId,
+      cardsPerPack: Number(packRecord?.cardsPerPack || 10),
+      packsPerBox: Number(packRecord?.packsPerBox || 36),
+      boxesPerCarton: Number(packRecord?.boxesPerCarton || 6),
+      slotPlan: Array.isArray(packRecord?.slotPlan) ? clone(packRecord.slotPlan) : [],
+      packCriteria: packRecord?.packCriteria && typeof packRecord.packCriteria === "object" ? clone(packRecord.packCriteria) : {},
+      wildcardInputs: packRecord?.wildcardInputs && typeof packRecord.wildcardInputs === "object" ? clone(packRecord.wildcardInputs) : {}
+    };
+    if (!Number.isFinite(normalized.cardsPerPack) || normalized.cardsPerPack < 1) normalized.cardsPerPack = 10;
+    if (!Number.isFinite(normalized.packsPerBox) || normalized.packsPerBox < 1) normalized.packsPerBox = 36;
+    if (!Number.isFinite(normalized.boxesPerCarton) || normalized.boxesPerCarton < 1) normalized.boxesPerCarton = 6;
+    while (normalized.slotPlan.length < normalized.cardsPerPack) normalized.slotPlan.push("");
+    normalized.slotPlan = normalized.slotPlan.slice(0, normalized.cardsPerPack);
+    return normalized;
+  }
+
+  function getPackRecordById(sourceState, packId) {
+    return (sourceState.packs || []).find((p) => p.id === packId) || null;
+  }
+
+  function loadActivePackFromLibrary(targetState = state, packId = targetState.ui?.editingPackId) {
+    const record = getPackRecordById(targetState, packId);
+    if (!record) return;
+    targetState.ui.editingPackId = record.id;
+    targetState.pack = {
+      setId: record.setId,
+      cardsPerPack: Number(record.cardsPerPack || 10),
+      packsPerBox: Number(record.packsPerBox || 36),
+      boxesPerCarton: Number(record.boxesPerCarton || 6),
+      slotPlan: clone(record.slotPlan || [])
+    };
+    targetState.packCriteria = clone(record.packCriteria || {});
+    targetState.wildcardInputs = clone(record.wildcardInputs || {});
+    syncPackConfiguration(targetState);
+  }
+
+  function syncPackLibraryFromActive(targetState = state) {
+    if (!targetState.ui || !Array.isArray(targetState.packs) || !targetState.packs.length) return;
+    const idx = targetState.packs.findIndex((p) => p.id === targetState.ui.editingPackId);
+    if (idx < 0) return;
+    targetState.packs[idx] = {
+      ...targetState.packs[idx],
+      setId: targetState.pack.setId,
+      cardsPerPack: Number(targetState.pack.cardsPerPack || 0),
+      packsPerBox: Number(targetState.pack.packsPerBox || 0),
+      boxesPerCarton: Number(targetState.pack.boxesPerCarton || 0),
+      slotPlan: clone(targetState.pack.slotPlan || []),
+      packCriteria: clone(targetState.packCriteria || {}),
+      wildcardInputs: clone(targetState.wildcardInputs || {})
+    };
+  }
+
+  function ensurePackSelections(targetState = state) {
+    ensureSetSelections(targetState);
+    const firstSetId = targetState.sets[0].id;
+    if (!Array.isArray(targetState.packs) || targetState.packs.length === 0) {
+      const legacyPack = makeDefaultPack(targetState.pack?.setId || firstSetId);
+      legacyPack.cardsPerPack = Number(targetState.pack?.cardsPerPack || legacyPack.cardsPerPack);
+      legacyPack.packsPerBox = Number(targetState.pack?.packsPerBox || legacyPack.packsPerBox);
+      legacyPack.boxesPerCarton = Number(targetState.pack?.boxesPerCarton || legacyPack.boxesPerCarton);
+      legacyPack.slotPlan = Array.isArray(targetState.pack?.slotPlan) ? clone(targetState.pack.slotPlan) : legacyPack.slotPlan;
+      legacyPack.packCriteria = targetState.packCriteria && typeof targetState.packCriteria === "object" ? clone(targetState.packCriteria) : {};
+      legacyPack.wildcardInputs = targetState.wildcardInputs && typeof targetState.wildcardInputs === "object" ? clone(targetState.wildcardInputs) : {};
+      targetState.packs = [legacyPack];
+      targetState.ui.editingPackId = legacyPack.id;
+    }
+    targetState.packs = targetState.packs.map((packRecord) => normalizePackRecord(packRecord, firstSetId));
+    targetState.packs.forEach((packRecord) => {
+      if (!getSetById(targetState, packRecord.setId)) {
+        packRecord.setId = firstSetId;
+      }
+    });
+
+    if (!getPackRecordById(targetState, targetState.ui.editingPackId)) {
+      targetState.ui.editingPackId = targetState.packs[0].id;
+    }
+
+    loadActivePackFromLibrary(targetState, targetState.ui.editingPackId);
+  }
+
+  function getEditingSet(sourceState = state) {
+    ensureSetSelections(sourceState);
+    return getSetById(sourceState, sourceState.ui.editingSetId);
+  }
+
+  function getPackSet(sourceState = state) {
+    ensureSetSelections(sourceState);
+    return getSetById(sourceState, sourceState.pack.setId);
+  }
+
+  function remapPackRulesToSet(targetState, packRecord, sourceSetId, targetSetId) {
+    if (!packRecord || sourceSetId === targetSetId) return;
+    const sourceSet = getSetById(targetState, sourceSetId);
+    const nextSet = getSetById(targetState, targetSetId);
+    if (!sourceSet || !nextSet) return;
+
+    const sourceByCode = new Map();
+    (sourceSet.rarities || []).forEach((r) => {
+      const code = String(r.shortcode || "").trim().toUpperCase();
+      if (code) sourceByCode.set(code, r.id);
+    });
+
+    const idMap = new Map();
+    (nextSet.rarities || []).forEach((r) => {
+      const code = String(r.shortcode || "").trim().toUpperCase();
+      if (!code) return;
+      const sourceId = sourceByCode.get(code);
+      if (sourceId) idMap.set(sourceId, r.id);
+    });
+
+    const mappedCriteria = {};
+    const mappedInputs = {};
+    (nextSet.rarities || []).forEach((rarity) => {
+      const sourceId = [...idMap.entries()].find(([, toId]) => toId === rarity.id)?.[0];
+      if (!sourceId) return;
+      if (packRecord.packCriteria && packRecord.packCriteria[sourceId]) {
+        mappedCriteria[rarity.id] = clone(packRecord.packCriteria[sourceId]);
+      }
+      if (packRecord.wildcardInputs && packRecord.wildcardInputs[sourceId] != null) {
+        mappedInputs[rarity.id] = packRecord.wildcardInputs[sourceId];
+      }
+    });
+
+    packRecord.slotPlan = (packRecord.slotPlan || []).map((slot) => {
+      if (slot === WILDCARD_SLOT_ID || !slot) return slot;
+      return idMap.get(slot) || "";
+    });
+    packRecord.packCriteria = mappedCriteria;
+    packRecord.wildcardInputs = mappedInputs;
+  }
+
+  function makeDefaultPackCriteria() {
+    return {
+      wildcardEligible: false,
+      minCopies: 0,
+      overrideMin: 0
+    };
+  }
+
+  function syncPackConfiguration(targetState = state) {
+    ensureSetSelections(targetState);
+    if (!targetState.pack || typeof targetState.pack !== "object") {
+      targetState.pack = { setId: targetState.ui.editingSetId, cardsPerPack: 10, packsPerBox: 36, boxesPerCarton: 6, slotPlan: [] };
+    }
+
+    const cardCount = Math.max(0, Number(targetState.pack.cardsPerPack || 0));
+    const packSet = getPackSet(targetState);
+    const rarities = packSet?.rarities || [];
+    const rarityIds = new Set(rarities.map((r) => r.id));
+
+    if (!Array.isArray(targetState.pack.slotPlan)) {
+      targetState.pack.slotPlan = [];
+    }
+    targetState.pack.slotPlan = targetState.pack.slotPlan.slice(0, cardCount);
+    while (targetState.pack.slotPlan.length < cardCount) {
+      targetState.pack.slotPlan.push("");
+    }
+    targetState.pack.slotPlan = targetState.pack.slotPlan.map((value) => {
+      if (value === WILDCARD_SLOT_ID || rarityIds.has(value)) return value;
+      return "";
+    });
+
+    if (!targetState.packCriteria || typeof targetState.packCriteria !== "object") {
+      targetState.packCriteria = {};
+    }
+    rarities.forEach((r) => {
+      const existing = targetState.packCriteria[r.id] || {};
+      targetState.packCriteria[r.id] = {
+        wildcardEligible: !!existing.wildcardEligible,
+        minCopies: Number(existing.minCopies || 0),
+        overrideMin: Number(existing.overrideMin || 0)
+      };
+      if (targetState.wildcardInputs[r.id] == null) {
+        targetState.wildcardInputs[r.id] = "0";
+      }
+    });
+
+    Object.keys(targetState.packCriteria).forEach((id) => {
+      if (!rarityIds.has(id)) delete targetState.packCriteria[id];
+    });
+    Object.keys(targetState.wildcardInputs).forEach((id) => {
+      if (!rarityIds.has(id)) delete targetState.wildcardInputs[id];
+    });
+
+    return targetState;
+  }
+
+  function getSlotSortWeight(slot, rarityOrder) {
+    if (!slot) return Number.MAX_SAFE_INTEGER;
+    if (slot === WILDCARD_SLOT_ID) return rarityOrder.length;
+    const index = rarityOrder.indexOf(slot);
+    return index === -1 ? rarityOrder.length + 1 : index;
+  }
+
+  function sortPackSlotPlan(targetState = state) {
+    syncPackConfiguration(targetState);
+    const rarityOrder = (getPackSet(targetState)?.rarities || []).map((r) => r.id);
+    targetState.pack.slotPlan.sort((left, right) => {
+      const leftWeight = getSlotSortWeight(left, rarityOrder);
+      const rightWeight = getSlotSortWeight(right, rarityOrder);
+      if (leftWeight !== rightWeight) return leftWeight - rightWeight;
+      if (left === right) return 0;
+      return String(left).localeCompare(String(right));
+    });
+  }
+
+  function getPackComposition(sourceState = state) {
+    syncPackConfiguration(sourceState);
+    const countsByRarity = {};
+    let wildcardSlots = 0;
+    let unassignedSlots = 0;
+
+    sourceState.pack.slotPlan.forEach((slot) => {
+      if (slot === WILDCARD_SLOT_ID) {
+        wildcardSlots += 1;
+        return;
+      }
+      if (!slot) {
+        unassignedSlots += 1;
+        return;
+      }
+      countsByRarity[slot] = (countsByRarity[slot] || 0) + 1;
+    });
+
+    return {
+      countsByRarity,
+      wildcardSlots,
+      unassignedSlots,
+      assignedSlots: sourceState.pack.slotPlan.length - unassignedSlots,
+      totalSlots: sourceState.pack.slotPlan.length
+    };
+  }
+
+  /* === FRACTION AND PROBABILITY HELPERS === */
+  function gcd(a, b) {
+    let x = Math.abs(a);
+    let y = Math.abs(b);
+    while (y !== 0) {
+      const t = y;
+      y = x % y;
+      x = t;
+    }
+    return x || 1;
+  }
+
+  function reduceFraction(num, den) {
+    const d = gcd(num, den);
+    return [num / d, den / d];
+  }
+
+  function toFractionApprox(value, cap = FRACTION_DENOM_CAP) {
+    let bestNum = 0;
+    let bestDen = 1;
+    let bestErr = Number.POSITIVE_INFINITY;
+    for (let den = 1; den <= cap; den += 1) {
+      const num = Math.round(value * den);
+      const err = Math.abs(value - num / den);
+      if (err < bestErr) {
+        bestErr = err;
+        bestNum = num;
+        bestDen = den;
+      }
+      if (err <= TOLERANCE) break;
+    }
+    const [n, d] = reduceFraction(bestNum, bestDen);
+    return { n, d, approx: Math.abs(value - n / d) > TOLERANCE };
+  }
+
+  function renderFractionText(value) {
+    const frac = toFractionApprox(value, FRACTION_DENOM_CAP);
+    return `${frac.n}/${frac.d}${frac.approx ? " (approx)" : ""}`;
+  }
+
+  function parseFractionInput(text) {
+    const raw = String(text || "").trim();
+    const m = raw.match(/^\s*(\d+)\s*\/\s*(\d+)\s*$/);
+    if (!m) {
+      return { ok: false, error: "Use integer a/b format." };
+    }
+    const a = Number(m[1]);
+    const b = Number(m[2]);
+    if (!Number.isInteger(a) || !Number.isInteger(b)) {
+      return { ok: false, error: "Use integer a/b values only." };
+    }
+    if (b === 0) return { ok: false, error: "Denominator cannot be zero." };
+    if (a < 0 || b < 0) return { ok: false, error: "Negative values are not allowed." };
+    const v = a / b;
+    if (v > 1 + TOLERANCE) return { ok: false, error: "Fraction value must be <= 1." };
+    return { ok: true, value: v };
+  }
+
+  function parseProbabilityInput(raw, mode) {
+    if (mode === "fraction") return parseFractionInput(raw);
+    const v = Number(raw);
+    if (!Number.isFinite(v)) return { ok: false, error: "Enter a numeric decimal probability." };
+    if (v < -TOLERANCE) return { ok: false, error: "Probability cannot be negative." };
+    if (v > 1 + TOLERANCE) return { ok: false, error: "Probability must be <= 1." };
+    return { ok: true, value: v };
+  }
+
+  function trimLeadingZerosSafe(raw, mode) {
+    const text = String(raw ?? "").trim();
+    if (!text) return text;
+
+    if (mode === "fraction") {
+      const match = text.match(/^(\d+)\s*\/\s*(\d+)$/);
+      if (!match) return text;
+      const left = match[1].replace(/^0+(?=\d)/, "");
+      const right = match[2].replace(/^0+(?=\d)/, "");
+      return `${left}/${right}`;
+    }
+
+    const decimalMatch = text.match(/^(\d+)(\.\d+)?$/);
+    if (!decimalMatch) return text;
+    const intPart = decimalMatch[1].replace(/^0+(?=\d)/, "");
+    return `${intPart}${decimalMatch[2] || ""}`;
+  }
+
+  /* === VALIDATION === */
+  function validateState(sourceState = state, strictMode = true) {
+    if (typeof sourceState === "boolean") {
+      strictMode = sourceState;
+      sourceState = state;
+    }
+
+    ensurePackSelections(sourceState);
+    syncPackConfiguration(sourceState);
+    const packSet = getPackSet(sourceState);
+    const rarities = packSet?.rarities || [];
+
+    const errors = [];
+    const warnings = [];
+
+    if (!packSet) {
+      errors.push({ key: "packSet", msg: "Associate the pack to a set before calculating." });
+      return { errors, warnings };
+    }
+
+    if (!String(packSet.name || "").trim()) {
+      errors.push({ key: "packSet", msg: "The selected pack set must have a name." });
+    }
+    if (Number(packSet.totalCards || 0) < 1) {
+      errors.push({ key: "packSet", msg: "The selected pack set must define a total card count." });
+    }
+
+    if (rarities.length === 0) {
+      errors.push({ key: "rarities", msg: "Add at least one rarity." });
+    }
+    if (rarities.length > MAX_RARITY_COUNT) {
+      errors.push({ key: "rarities", msg: `Rarity count exceeds max ${MAX_RARITY_COUNT}.` });
+    }
+
+    const seen = new Map();
+    rarities.forEach((r, i) => {
+      const s = String(r.shortcode || "").trim().toUpperCase();
+      if (!s) errors.push({ key: `rarity:${i}:shortcode`, msg: `Rarity ${i + 1} shortcode is required.` });
+      if (seen.has(s)) {
+        errors.push({ key: `rarity:${i}:shortcode`, msg: `Duplicate shortcode "${s}".` });
+      } else {
+        seen.set(s, true);
+      }
+      if (!r.name || !String(r.name).trim()) errors.push({ key: `rarity:${i}:name`, msg: `Rarity ${i + 1} name is required.` });
+      if (Number(r.setCount) < 1) errors.push({ key: `rarity:${i}:setCount`, msg: `Rarity ${i + 1} set cards must be >= 1.` });
+    });
+
+    const raritySetTotal = rarities.reduce((sum, r) => sum + Number(r.setCount || 0), 0);
+    if (Number(packSet.totalCards || 0) >= 1 && raritySetTotal !== Number(packSet.totalCards)) {
+      errors.push({ key: "packSet", msg: `Rarity set-card totals (${raritySetTotal}) must equal total cards in the selected set (${packSet.totalCards}).` });
+    }
+
+    if (sourceState.pack.cardsPerPack < 1 || sourceState.pack.cardsPerPack > 15) {
+      errors.push({ key: "cardsPerPack", msg: "Cards per pack must be 1-15." });
+    }
+    if (sourceState.pack.packsPerBox < 1 || sourceState.pack.boxesPerCarton < 1) {
+      errors.push({ key: "packaging", msg: "Packaging values must be >= 1." });
+    }
+    if (sourceState.pack.packsPerBox < 6 || sourceState.pack.packsPerBox > 36) {
+      warnings.push("Packs per box is outside recommended 6-36 range.");
+    }
+    if (sourceState.pack.boxesPerCarton < 2 || sourceState.pack.boxesPerCarton > 6) {
+      warnings.push("Boxes per carton is outside recommended 2-6 range.");
+    }
+
+    const composition = getPackComposition(sourceState);
+    if (composition.totalSlots !== Number(sourceState.pack.cardsPerPack)) {
+      errors.push({ key: "composition", msg: `Pack slot count (${composition.totalSlots}) must equal cards per pack (${sourceState.pack.cardsPerPack}).` });
+    }
+    if (composition.unassignedSlots > 0) {
+      const firstUnassigned = sourceState.pack.slotPlan.findIndex((slot) => !slot);
+      errors.push({ key: `pack-slot:${firstUnassigned}`, msg: `Assign all pack slots before calculating. ${composition.unassignedSlots} slot${composition.unassignedSlots === 1 ? " is" : "s are"} still unassigned.` });
+    }
+
+    rarities.forEach((r) => {
+      const criteria = sourceState.packCriteria[r.id] || makeDefaultPackCriteria();
+      if (Number(criteria.minCopies) < 0) {
+        errors.push({ key: `criteria:${r.id}:minCopies`, msg: `${r.name || r.shortcode}: rarity min copies cannot be negative.` });
+      }
+      if (Number(criteria.overrideMin) < 0) {
+        errors.push({ key: `criteria:${r.id}:overrideMin`, msg: `${r.name || r.shortcode}: per-card override minimum cannot be negative.` });
+      }
+    });
+
+    if (composition.wildcardSlots > 0) {
+      const eligibles = rarities.filter((r) => sourceState.packCriteria[r.id]?.wildcardEligible);
+      if (eligibles.length === 0) {
+        errors.push({ key: "wildcard", msg: "Wildcard slots exist but no wildcard-eligible rarities are set." });
+      }
+
+      let sum = 0;
+      let parseBlocked = false;
+      for (const r of eligibles) {
+        const input = sourceState.wildcardInputs[r.id] ?? "0";
+        const parsed = parseProbabilityInput(input, sourceState.ui.probInputMode);
+        if (!parsed.ok) {
+          if (strictMode) {
+            errors.push({ key: `wildcard:${r.id}`, msg: `${r.name || r.shortcode}: ${parsed.error}` });
+            parseBlocked = true;
+          }
+          continue;
+        }
+        sum += parsed.value;
+      }
+
+      if (!parseBlocked && Math.abs(sum - 1) > TOLERANCE) {
+        errors.push({ key: "wildcard:sum", msg: `Wildcard probabilities must be equal to 1.0 within tolerance. Current sum: ${sum.toFixed(9)}` });
+      }
+    }
+
+    return { errors, warnings };
+  }
+
+  /* === CALCULATION === */
+  function runCalculation(activeState) {
+    ensurePackSelections(activeState);
+    syncPackConfiguration(activeState);
+    const validation = validateState(activeState, true);
+    if (validation.errors.length) {
+      return { ok: false, validation };
+    }
+    const packSet = getPackSet(activeState);
+    const rarities = packSet?.rarities || [];
+
+    const packs = Number(activeState.run.packs);
+    const composition = getPackComposition(activeState);
+    const wildcardSlots = composition.wildcardSlots;
+    const fixedTotals = {};
+    const expectedByRarity = {};
+    const perCard = {};
+
+    rarities.forEach((r) => {
+      const fixed = Number(composition.countsByRarity[r.id] || 0) * packs;
+      fixedTotals[r.id] = fixed;
+      expectedByRarity[r.id] = fixed;
+    });
+
+    if (wildcardSlots > 0) {
+      const wildcardCardsTotal = wildcardSlots * packs;
+      const eligibles = rarities.filter((r) => activeState.packCriteria[r.id]?.wildcardEligible);
+
+      const weighted = eligibles.map((r, idx) => {
+        const p = parseProbabilityInput(activeState.wildcardInputs[r.id] || "0", activeState.ui.probInputMode);
+        const prob = p.ok ? p.value : 0;
+        const expected = prob * wildcardCardsTotal;
+        return { id: r.id, idx, prob, expected, rounded: Math.floor(expected), frac: expected - Math.floor(expected) };
+      });
+
+      const floorTotal = weighted.reduce((s, w) => s + w.rounded, 0);
+      let remaining = wildcardCardsTotal - floorTotal;
+
+      if (activeState.run.roundingPolicy === "drift") {
+        weighted.forEach((w) => {
+          w.rounded = Math.round(w.expected);
+        });
+        const sumRounded = weighted.reduce((s, w) => s + w.rounded, 0);
+        remaining = wildcardCardsTotal - sumRounded;
+      }
+
+      if (remaining !== 0) {
+        const sorted = weighted.slice().sort((a, b) => {
+          if (remaining > 0 && b.frac !== a.frac) return b.frac - a.frac;
+          if (remaining < 0 && a.frac !== b.frac) return a.frac - b.frac;
+          return a.idx - b.idx;
+        });
+
+        let i = 0;
+        while (remaining !== 0 && i < sorted.length * 10) {
+          const target = sorted[i % sorted.length];
+          if (remaining > 0) {
+            target.rounded += 1;
+            remaining -= 1;
+          } else if (target.rounded > 0) {
+            target.rounded -= 1;
+            remaining += 1;
+          }
+          i += 1;
+        }
+      }
+
+      if (activeState.run.roundingPolicy === "strict") {
+        const byId = Object.fromEntries(rarities.map((r) => [r.id, r]));
+        weighted.forEach((w) => {
+          const rarity = byId[w.id];
+          const criteria = activeState.packCriteria[w.id] || makeDefaultPackCriteria();
+          const minCopies = activeState.run.perCardOverrideMode ? Number(criteria.overrideMin || 0) : Number(criteria.minCopies || 0);
+          const minTotal = minCopies * Number(rarity.setCount || 1);
+          const requiredWildcard = Math.max(0, minTotal - fixedTotals[w.id]);
+          if (w.rounded >= requiredWildcard) {
+            return;
+          }
+          let needed = requiredWildcard - w.rounded;
+          const donors = weighted
+            .filter((d) => d.id !== w.id && d.rounded > 0)
+            .sort((a, b) => {
+              if (b.rounded !== a.rounded) return b.rounded - a.rounded;
+              return a.idx - b.idx;
+            });
+          for (const donor of donors) {
+            if (needed <= 0) break;
+            const transfer = Math.min(needed, donor.rounded);
+            donor.rounded -= transfer;
+            w.rounded += transfer;
+            needed -= transfer;
+          }
+        });
+      }
+
+      weighted.forEach((w) => {
+        expectedByRarity[w.id] += w.rounded;
+      });
+    }
+
+    rarities.forEach((r) => {
+      perCard[r.id] = expectedByRarity[r.id] / Number(r.setCount || 1);
+    });
+
+    const totalCards = Object.values(expectedByRarity).reduce((s, v) => s + v, 0);
+
+    const rows = rarities.map((r) => {
+      const total = expectedByRarity[r.id];
+      const percent = totalCards > 0 ? (total / totalCards) * 100 : 0;
+      return {
+        rarityId: r.id,
+        name: r.name,
+        shortcode: r.shortcode,
+        cards: total,
+        perCard: perCard[r.id],
+        percent
+      };
+    });
+
+    return {
+      ok: true,
+      validation,
+      totals: {
+        totalCards,
+        totalPacks: packs,
+        perRarity: expectedByRarity,
+        rows
+      }
+    };
+  }
+
+  /* === RENDERING === */
+  function renderTabs() {
+    const active = state.ui.activeTab;
+    ["welcome", "rarities", "packEditor", "rules", "calculator", "config", "files"].forEach((name) => {
+      const btn = byId(`tab${name[0].toUpperCase()}${name.slice(1)}`);
+      const panel = byId(`${name}Tab`);
+      const on = active === name;
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+      panel.classList.toggle("active", on);
+    });
+  }
+
+  function renderLocales() {
+    const sel = byId("localeSelect");
+    if (sel.options.length) return;
+    LOCALES.forEach((loc) => {
+      const opt = document.createElement("option");
+      opt.value = loc;
+      opt.textContent = loc;
+      sel.appendChild(opt);
+    });
+  }
+
+  function renderSetSelectors() {
+    ensurePackSelections(state);
+    ensureSetSelections(state);
+    const setOptions = state.sets.map((setDef) => `<option value="${setDef.id}">${escapeHtml(setDef.name || "Untitled Set")}</option>`).join("");
+    byId("setPickerSelect").innerHTML = setOptions;
+    byId("setPickerSelect").value = state.ui.editingSetId;
+    byId("packSetSelect").innerHTML = setOptions;
+    byId("packSetSelect").value = state.pack.setId;
+    byId("copyPackSetSelect").innerHTML = setOptions;
+    byId("copyPackSetSelect").value = state.pack.setId;
+    byId("removeSetBtn").disabled = state.sets.length <= 1;
+    const activeSet = getEditingSet(state);
+    byId("setActiveTitle").textContent = `Active Set: ${activeSet?.name?.trim() || "Untitled Set"}`;
+  }
+
+  function renderPackSelectors() {
+    ensurePackSelections(state);
+    const packOptions = state.packs
+      .map((packDef, idx) => `<option value="${packDef.id}">${escapeHtml(packDef.name || `Untitled Pack ${idx + 1}`)}</option>`)
+      .join("");
+    byId("packPickerSelect").innerHTML = packOptions;
+    byId("packPickerSelect").value = state.ui.editingPackId;
+    const activePack = getPackRecordById(state, state.ui.editingPackId);
+    byId("packName").value = activePack?.name || "";
+    byId("removePackBtn").disabled = state.packs.length <= 1;
+    const activeSet = getPackSet(state);
+    const packLabel = activePack?.name?.trim() || "Untitled Pack";
+    const setLabel = activeSet?.name?.trim() || "Untitled Set";
+    byId("packActiveTitle").textContent = `Active Pack: ${packLabel} (${setLabel})`;
+  }
+
+  function renderRarityTable() {
+    ensureSetSelections(state);
+    const editingSet = getEditingSet(state);
+    const rarities = editingSet?.rarities || [];
+    const body = byId("rarityBody");
+    body.innerHTML = "";
+
+    renderSetSelectors();
+
+    const raritySetTotal = rarities.reduce((sum, r) => sum + Number(r.setCount || 0), 0);
+    const setStatus = byId("setDistributionStatus");
+    const declaredTotal = Number(editingSet?.totalCards || 0);
+    if (declaredTotal < 1) {
+      setStatus.innerHTML = statusLine("warn", `Rarity total: ${raritySetTotal}. Enter the total cards in the set to validate the distribution.`);
+    } else if (raritySetTotal === declaredTotal) {
+      setStatus.innerHTML = statusLine("ok", `Rarity total matches set total: ${raritySetTotal} of ${declaredTotal}.`);
+    } else {
+      setStatus.innerHTML = statusLine("warn", `Rarity total is ${raritySetTotal}, but the declared set total is ${declaredTotal}.`);
+    }
+
+    rarities.forEach((r, idx) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><input data-role="rarity-name" data-id="${r.id}" type="text" value="${escapeHtml(r.name || "")}"></td>
+        <td><input data-role="rarity-shortcode" data-id="${r.id}" type="text" value="${escapeHtml(r.shortcode || "")}"></td>
+        <td><input data-role="rarity-setCount" data-id="${r.id}" type="number" min="1" step="1" value="${Number(r.setCount || 1)}"></td>
+        <td><button data-role="rarity-delete" data-id="${r.id}" ${idx === 0 ? "" : ""}>Remove</button></td>
+      `;
+      body.appendChild(tr);
+    });
+
+    const nudge = byId("rarityTabPrompt");
+    if (nudge) {
+      nudge.style.display = rarities.length > 0 ? "block" : "none";
+      nudge.innerHTML = rarities.length > 0
+        ? `<strong>${rarities.length} ${rarities.length === 1 ? "rarity" : "rarities"} defined for ${escapeHtml(editingSet?.name || "this set")}.</strong> Ready to configure packs? <button class="ghost" style="padding:0 4px;font-size:inherit;" id="goToPackEditorFromSetBtn">Go to Pack Editor &rarr;</button>`
+        : "";
+      const goBtn = byId("goToPackEditorFromSetBtn");
+      if (goBtn) goBtn.addEventListener("click", () => setActiveTab("packEditor"));
+    }
+  }
+
+  function renderPackBuilder() {
+    syncPackConfiguration(state);
+    const packSet = getPackSet(state);
+    const rarities = packSet?.rarities || [];
+
+    const card = byId("packBuilderCard");
+    const grid = byId("packSlotGrid");
+    const criteriaBody = byId("packCriteriaBody");
+    const summary = byId("packSlotSummary");
+    const hasRarities = rarities.length > 0;
+
+    card.style.display = hasRarities ? "block" : "none";
+    if (!hasRarities) {
+      grid.innerHTML = "";
+      criteriaBody.innerHTML = "";
+      summary.innerHTML = "";
+      return;
+    }
+
+    const composition = getPackComposition(state);
+    const parts = rarities
+      .map((r) => `${r.shortcode || r.name || "Unnamed"}: ${composition.countsByRarity[r.id] || 0}`)
+      .filter(Boolean);
+    parts.push(`Wildcard: ${composition.wildcardSlots}`);
+    summary.innerHTML = statusLine(
+      composition.unassignedSlots === 0 ? "ok" : "warn",
+      `Pack layout summary: ${parts.join(" | ")}. ${composition.unassignedSlots > 0 ? `${composition.unassignedSlots} slot${composition.unassignedSlots === 1 ? " is" : "s are"} still unassigned.` : "All slots are assigned."}`
+    );
+
+    grid.innerHTML = "";
+    state.pack.slotPlan.forEach((slot, index) => {
+      const tile = document.createElement("div");
+      tile.className = "slot-tile";
+      const options = ['<option value="">Select...</option>']
+        .concat(rarities.map((r) => `<option value="${r.id}" ${slot === r.id ? "selected" : ""}>${escapeHtml(r.name || r.shortcode || `Rarity ${index + 1}`)}</option>`))
+        .concat([`<option value="${WILDCARD_SLOT_ID}" ${slot === WILDCARD_SLOT_ID ? "selected" : ""}>Wildcard</option>`])
+        .join("");
+      tile.innerHTML = `
+        <strong>Card ${index + 1}</strong>
+        <select data-role="pack-slot" data-index="${index}" aria-label="Card ${index + 1} rarity selection">${options}</select>
+      `;
+      grid.appendChild(tile);
+    });
+
+    criteriaBody.innerHTML = "";
+    rarities.forEach((r) => {
+      const criteria = state.packCriteria[r.id] || makeDefaultPackCriteria();
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(r.name || r.shortcode)}</td>
+        <td class="mono">${composition.countsByRarity[r.id] || 0}</td>
+        <td><input data-role="criteria-minCopies" data-id="${r.id}" type="number" min="0" step="1" value="${Number(criteria.minCopies || 0)}"></td>
+        <td><input data-role="criteria-overrideMin" data-id="${r.id}" type="number" min="0" step="1" value="${Number(criteria.overrideMin || 0)}"></td>
+      `;
+      criteriaBody.appendChild(tr);
+    });
+  }
+
+  function renderWildcardEligibilityList() {
+    const box = byId("wildcardEligibilityList");
+    const composition = getPackComposition(state);
+    const hasWildcards = composition.wildcardSlots > 0;
+    const packSet = getPackSet(state);
+    const rarities = packSet?.rarities || [];
+
+    if (!hasWildcards) {
+      box.innerHTML = "";
+      return;
+    }
+
+    if (!rarities.length) {
+      box.innerHTML = statusLine("warn", "Define rarities before setting wildcard eligibility.");
+      return;
+    }
+
+    const items = rarities.map((r) => {
+      const criteria = state.packCriteria[r.id] || makeDefaultPackCriteria();
+      return `<label style="display:inline-flex;align-items:center;gap:6px;margin:0 12px 8px 0;"><input data-role="wildcard-eligibility" data-id="${r.id}" type="checkbox" ${criteria.wildcardEligible ? "checked" : ""}> ${escapeHtml(r.name || r.shortcode)}</label>`;
+    }).join("");
+
+    box.innerHTML = `
+      <div class="status ${rarities.some((r) => state.packCriteria[r.id]?.wildcardEligible) ? "ok" : "warn"}">
+        <strong>Wildcard-eligible rarities</strong><br>
+        ${items}
+      </div>
+    `;
+  }
+
+  function getWildcardRunningTotal() {
+    const eligibles = (getPackSet(state)?.rarities || []).filter((r) => state.packCriteria[r.id]?.wildcardEligible);
+    let sum = 0;
+    let invalidCount = 0;
+    let dirtyCount = 0;
+
+    eligibles.forEach((r) => {
+      const input = String(state.wildcardInputs[r.id] ?? "0");
+      const parsed = parseProbabilityInput(input, state.ui.probInputMode);
+      if (state.validationDraft.wildcardDirty[r.id]) {
+        dirtyCount += 1;
+      }
+      if (parsed.ok) {
+        sum += parsed.value;
+      } else {
+        invalidCount += 1;
+      }
+    });
+
+    return {
+      eligibleCount: eligibles.length,
+      sum,
+      remaining: 1 - sum,
+      invalidCount,
+      dirtyCount
+    };
+  }
+
+  function renderWildcardFeedback() {
+    const hasWildcards = getPackComposition(state).wildcardSlots > 0;
+    const notice = byId("wildcardNotice");
+    const total = byId("wildcardRunningTotal");
+
+    if (!hasWildcards) {
+      notice.innerHTML = "";
+      total.innerHTML = "";
+      return;
+    }
+
+    const progress = getWildcardRunningTotal();
+    const sumText = progress.sum.toFixed(9);
+    const remainingText = Math.abs(progress.remaining).toFixed(9);
+
+    if (progress.eligibleCount === 0) {
+      notice.innerHTML = statusLine("error", "Wildcard slots exist but no wildcard-eligible rarities are set.");
+      total.innerHTML = statusLine("warn", "Running total: 0.000000000 of 1.000000000.");
+      return;
+    }
+
+    total.innerHTML = statusLine(
+      Math.abs(progress.remaining) <= TOLERANCE && progress.invalidCount === 0 ? "ok" : "warn",
+      `Running total: ${sumText} of 1.000000000. ${progress.remaining >= 0 ? "Remaining" : "Over by"}: ${remainingText}.`
+    );
+
+    if (progress.invalidCount > 0 || progress.dirtyCount > 0) {
+      const pendingBits = [];
+      if (progress.invalidCount > 0) pendingBits.push(`${progress.invalidCount} invalid entr${progress.invalidCount === 1 ? "y" : "ies"}`);
+      if (progress.dirtyCount > 0) pendingBits.push(`${progress.dirtyCount} field${progress.dirtyCount === 1 ? "" : "s"} still being edited`);
+      notice.innerHTML = statusLine("pending", `Wildcard totals are live while you type. Final validation and recalculation run on blur. ${pendingBits.join(", ")}.`);
+      return;
+    }
+
+    const validation = validateState(state, true);
+    const sumErr = validation.errors.find((e) => e.key.startsWith("wildcard"));
+    notice.innerHTML = sumErr
+      ? statusLine("error", sumErr.msg)
+      : statusLine("ok", "Wildcard probabilities are equal to 1.0 within tolerance.");
+  }
+
+  function renderWildcardTable() {
+    const body = byId("wildcardBody");
+    body.innerHTML = "";
+
+    const eligibles = (getPackSet(state)?.rarities || []).filter((r) => state.packCriteria[r.id]?.wildcardEligible);
+    const hasWildcards = getPackComposition(state).wildcardSlots > 0;
+    byId("wildcardCard").style.display = hasWildcards ? "block" : "none";
+    renderWildcardEligibilityList();
+
+    if (!hasWildcards) {
+      renderWildcardFeedback();
+      return;
+    }
+
+    eligibles.forEach((r) => {
+      if (state.wildcardInputs[r.id] == null) {
+        state.wildcardInputs[r.id] = "0";
+      }
+      const input = String(state.wildcardInputs[r.id]);
+      const parsed = parseProbabilityInput(input, state.ui.probInputMode);
+      const pending = state.validationDraft.wildcardDirty[r.id] && !parsed.ok;
+      let decimalDisplay = "-";
+      let fractionDisplay = "-";
+      if (parsed.ok) {
+        decimalDisplay = parsed.value.toFixed(9);
+        fractionDisplay = renderFractionText(parsed.value);
+      }
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(r.name || r.shortcode)}</td>
+        <td>
+          <input aria-label="${escapeHtml(r.name)} probability input" data-role="wildcard-input" data-id="${r.id}" type="text" value="${escapeHtml(input)}">
+          ${pending ? '<div class="status pending">Pending-invalid. Validate on blur or recalc.</div>' : ""}
+        </td>
+        <td class="mono">${escapeHtml(decimalDisplay)}</td>
+        <td class="mono">${escapeHtml(fractionDisplay)}</td>
+      `;
+      body.appendChild(tr);
+    });
+
+    renderWildcardFeedback();
+  }
+
+  function renderRules() {
+    const box = byId("ruleList");
+    box.innerHTML = "";
+    state.rules.forEach((rule, idx) => {
+      const div = document.createElement("div");
+      div.className = "rule-row";
+      const badges = [];
+      if (rule.group && rule.group.includes("fp")) badges.push('<span class="pill fp">Foundational Pair</span>');
+      if (rule.group && rule.group.includes("tc")) badges.push('<span class="pill tc">Tradeoff Cluster</span>');
+      div.innerHTML = `
+        <div class="txt">
+          <div class="title">${idx + 1}. ${escapeHtml(rule.label)}</div>
+          <div>${badges.join("")}</div>
+          <div class="adv">${escapeHtml(rule.advice)}</div>
+        </div>
+        <div class="rule-controls">
+          <button data-role="rule-up" data-id="${rule.id}" aria-label="Move ${escapeHtml(rule.label)} up">Up</button>
+          <button data-role="rule-down" data-id="${rule.id}" aria-label="Move ${escapeHtml(rule.label)} down">Down</button>
+        </div>
+      `;
+      box.appendChild(div);
+    });
+  }
+
+  function renderConfigTab() {
+    byId("migrationNotice").innerHTML = state.ui.migrationNoticeHtml || "";
+  }
+
+  function renderFileTab() {
+    byId("pinnedFolderLabel").value = pinnedDirectoryHandle
+      ? (pinnedFolderDisplayPath || getPinnedFolderDisplayPath(pinnedDirectoryHandle))
+      : "No pinned folder";
+    const supported = !!window.showDirectoryPicker;
+    byId("pickFolderBtn").disabled = !supported;
+    byId("clearFolderBtn").disabled = !supported;
+
+    if (!supported) {
+      byId("fileModeNotice").innerHTML = statusLine("warn", "File System Access API unavailable. Using download/upload fallback mode.");
+    } else {
+      byId("fileModeNotice").innerHTML = statusLine("ok", "Full file mode available. You can pin a folder.");
+    }
+  }
+
+  function renderSummary(result) {
+    const internals = byId("internals");
+    const summary = byId("summary");
+
+    if (!result.ok) {
+      internals.innerHTML = statusLine("error", "Calculation blocked by validation errors.");
+      summary.innerHTML = statusLine("warn", "Fix issues in the error panel to generate summary report.");
+      byId("calcStatus").value = "Blocked";
+      return;
+    }
+
+    byId("calcStatus").value = "Calculated";
+    const rows = result.totals.rows;
+    const detailRows = rows.map((r) => `
+      <tr>
+        <td>${escapeHtml(r.name)}</td>
+        <td>${escapeHtml(r.shortcode)}</td>
+        <td>
+          <div class="per-card-cell">
+            <span class="mono per-card-value">${formatNumber(r.cards)}</span>
+            <button class="tiny-btn" data-role="percard-nudge" data-dir="-1" data-rarity-id="${escapeHtml(r.rarityId)}" title="Lower card-count target by 1">-</button>
+            <button class="tiny-btn" data-role="percard-nudge" data-dir="1" data-rarity-id="${escapeHtml(r.rarityId)}" title="Raise card-count target by 1">+</button>
+            <label class="pin-wrap"><input type="checkbox" data-role="percard-pin" data-rarity-id="${escapeHtml(r.rarityId)}" ${state.ui.nudgePins?.[r.rarityId] ? "checked" : ""}> Pin</label>
+          </div>
+        </td>
+        <td class="mono">${formatNumber(r.perCard)}</td>
+        <td class="mono">${formatNumber(r.percent)}%</td>
+      </tr>
+    `).join("");
+
+    internals.innerHTML = `
+      <div class="status ok">Detailed internals reflect current rounding policy and priority order.</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Rarity</th><th>Code</th><th>Cards</th><th>Per Card</th><th>Yield %</th></tr></thead>
+          <tbody>${detailRows}</tbody>
+        </table>
+      </div>
+      <p class="hint">Total cards: <strong>${formatNumber(result.totals.totalCards)}</strong> across ${formatNumber(result.totals.totalPacks)} packs.</p>
+    `;
+
+    summary.innerHTML = `
+      <div class="status ok">Summary report contract fields are available for export.</div>
+      <ul>
+        <li>Rarity table with totals and percentages</li>
+        <li>Use +/- beside card counts to nudge by 1 card by redistributing wildcard ratios (run size stays fixed)</li>
+        <li>Pack rules and wildcard rules (decimal + fraction, with approx marker when capped)</li>
+        <li>Packaging parameters and total yield</li>
+        <li>Per-card counts: ${state.run.perCardOverrideMode ? "included (override mode enabled)" : "omitted (override mode disabled)"}</li>
+      </ul>
+    `;
+  }
+
+  function renderErrors(validation) {
+    const panel = byId("errorSummary");
+    const all = validation.errors;
+    const warns = validation.warnings;
+
+    if (all.length === 0 && warns.length === 0) {
+      panel.innerHTML = statusLine("ok", "No validation issues.");
+      return;
+    }
+
+    const blocks = [];
+    if (all.length) {
+      blocks.push(`<div class="status error"><strong>Blocking issues</strong><ul>${all.map((e) => `<li>${escapeHtml(e.msg)} <button data-role="jump-error" data-key="${escapeHtml(e.key)}" class="ghost">Jump</button></li>`).join("")}</ul></div>`);
+    }
+    if (warns.length) {
+      blocks.push(`<div class="status warn"><strong>Warnings</strong><ul>${warns.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul></div>`);
+    }
+    panel.innerHTML = blocks.join("");
+  }
+
+  function renderAll() {
+    ensurePackSelections(state);
+    syncPackConfiguration(state);
+    renderTabs();
+    renderLocales();
+    renderSetSelectors();
+    renderPackSelectors();
+    const editingSet = getEditingSet(state);
+    byId("setName").value = editingSet?.name || "";
+    byId("setTotalCards").value = editingSet?.totalCards || "";
+    byId("cardsPerPack").value = state.pack.cardsPerPack;
+    byId("packsPerBox").value = state.pack.packsPerBox;
+    byId("boxesPerCarton").value = state.pack.boxesPerCarton;
+    byId("runPacks").value = state.run.packs;
+    byId("roundingPolicy").value = state.run.roundingPolicy;
+    byId("perCardOverrideMode").checked = !!state.run.perCardOverrideMode;
+    byId("probInputMode").value = state.ui.probInputMode;
+    byId("localeSelect").value = state.ui.locale;
+
+    renderRarityTable();
+    const packRarities = getPackSet(state)?.rarities || [];
+    byId("emptyPrompt").style.display = packRarities.length > 0 ? "none" : "block";
+    renderPackBuilder();
+    renderWildcardTable();
+    renderRules();
+    renderConfigTab();
+    renderFileTab();
+    renderUndoRedo();
+
+    const validation = validateState(state, true);
+    renderErrors(validation);
+  }
+
+  function resolveFieldByErrorKey(key) {
+    if (!key) return null;
+    if (key === "packSet") return byId("packSetSelect");
+    if (key === "cardsPerPack") return byId("cardsPerPack");
+    if (key === "packaging") return byId("packsPerBox");
+    if (key === "composition") return byId("cardsPerPack");
+    if (key.startsWith("pack-slot:")) {
+      const index = Number(key.split(":")[1]);
+      return byId("packSlotGrid").querySelector(`select[data-role='pack-slot'][data-index='${index}']`);
+    }
+    if (key === "wildcard:sum") {
+      const first = byId("wildcardBody").querySelector("input[data-role='wildcard-input']");
+      return first || null;
+    }
+    if (key.startsWith("wildcard:")) {
+      const id = key.split(":")[1];
+      return byId("wildcardBody").querySelector(`input[data-role='wildcard-input'][data-id='${id}']`);
+    }
+    if (key.startsWith("rarity:")) {
+      const [, idx, field] = key.split(":");
+      const row = (getPackSet(state)?.rarities || [])[Number(idx)];
+      if (!row) return null;
+      const roleMap = {
+        shortcode: "rarity-shortcode",
+        name: "rarity-name",
+        setCount: "rarity-setCount"
+      };
+      const role = roleMap[field] || "rarity-name";
+      return byId("rarityBody").querySelector(`input[data-role='${role}'][data-id='${row.id}']`);
+    }
+    if (key.startsWith("criteria:")) {
+      const [, id, field] = key.split(":");
+      const roleMap = {
+        minCopies: "criteria-minCopies",
+        overrideMin: "criteria-overrideMin"
+      };
+      const role = roleMap[field];
+      if (!role) return null;
+      return byId("packCriteriaBody").querySelector(`input[data-role='${role}'][data-id='${id}']`);
+    }
+    return null;
+  }
+
+  function targetTabForErrorKey(key) {
+    if (!key) return "calculator";
+    if (key.startsWith("rarity:") || key === "rarities") return "rarities";
+    if (key === "rules") return "rules";
+    if (key === "packSet" || key === "cardsPerPack" || key === "packaging" || key === "composition") return "packEditor";
+    if (key.startsWith("pack-slot:") || key.startsWith("criteria:") || key.startsWith("wildcard:")) return "packEditor";
+    if (key === "wildcard") return "packEditor";
+    return "calculator";
+  }
+
+  function focusAndPulseField(node) {
+    if (!node) return;
+    node.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+    node.focus();
+    node.classList.remove("error-pulse");
+    void node.offsetWidth;
+    node.classList.add("error-pulse");
+    setTimeout(() => node.classList.remove("error-pulse"), 1300);
+  }
+
+  function jumpToErrorField(key) {
+    if (!key) return;
+
+    if (key.startsWith("rarity:") && state.ui.editingSetId !== state.pack.setId) {
+      state.ui.editingSetId = state.pack.setId;
+      renderAll();
+    }
+
+    const targetTab = targetTabForErrorKey(key);
+    setActiveTab(targetTab);
+
+    const node = resolveFieldByErrorKey(key);
+    if (!node) return;
+    focusAndPulseField(node);
+  }
+
+  /* === PERSISTENCE AND MIGRATION === */
+  function persistState() {
+    syncPackLibraryFromActive(state);
+    state.metadata.timestamp = new Date().toISOString();
+    state.metadata.appVersion = APP_VERSION;
+    state.schemaVersion = SCHEMA_VERSION;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
+
+  function loadPersistedState() {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      const migrated = migrateConfig(parsed);
+      state = migrated.state;
+      if (migrated.changes.length) {
+        showGlobal(statusLine("warn", `Restored config with migration updates (${migrated.changes.length} fields).`));
+      }
+    } catch (_e) {
+      showGlobal(statusLine("warn", "Stored state could not be restored; using defaults."));
+    }
+  }
+
+  function truncateForUi(value) {
+    const s = typeof value === "string" ? value : JSON.stringify(value);
+    if (s.length <= 120) return s;
+    return `${s.slice(0, 117)}...`;
+  }
+
+  function migrateConfig(input) {
+    const changes = [];
+    const next = makeDefaultState();
+
+    function assign(path, value) {
+      const parts = path.split(".");
+      let target = next;
+      for (let i = 0; i < parts.length - 1; i += 1) target = target[parts[i]];
+      target[parts[parts.length - 1]] = value;
+    }
+
+    function read(path) {
+      const parts = path.split(".");
+      let cur = input;
+      for (const p of parts) {
+        if (cur == null || !(p in cur)) return undefined;
+        cur = cur[p];
+      }
+      return cur;
+    }
+
+    const paths = [
+      "sets", "packs", "ui.editingSetId", "ui.editingPackId",
+      "ui.activeTab", "ui.locale", "ui.probInputMode", "ui.nudgePins",
+      "pack.setId", "pack.cardsPerPack", "pack.packsPerBox", "pack.boxesPerCarton", "pack.slotPlan",
+      "run.packs", "run.roundingPolicy", "rules", "rarities", "packCriteria", "wildcardInputs", "validationDraft"
+    ];
+
+    paths.forEach((path) => {
+      const oldVal = read(path);
+      if (oldVal !== undefined) {
+        assign(path, oldVal);
+      }
+    });
+
+    if (!Array.isArray(next.sets) || next.sets.length === 0) {
+      const legacySet = makeDefaultSet();
+      legacySet.name = read("set.name") || "";
+      legacySet.totalCards = Number(read("set.totalCards") || 0);
+      legacySet.rarities = Array.isArray(read("rarities")) ? clone(read("rarities")) : [];
+      next.sets = [legacySet];
+      next.ui.editingSetId = legacySet.id;
+      next.pack.setId = legacySet.id;
+    }
+    if (!next.validationDraft || typeof next.validationDraft !== "object") next.validationDraft = { wildcardDirty: {} };
+    if (!Array.isArray(next.packs) || next.packs.length === 0) {
+      const legacyPack = makeDefaultPack(next.pack?.setId || next.sets[0].id);
+      legacyPack.cardsPerPack = Number(next.pack.cardsPerPack || legacyPack.cardsPerPack);
+      legacyPack.packsPerBox = Number(next.pack.packsPerBox || legacyPack.packsPerBox);
+      legacyPack.boxesPerCarton = Number(next.pack.boxesPerCarton || legacyPack.boxesPerCarton);
+      legacyPack.slotPlan = Array.isArray(next.pack.slotPlan) ? clone(next.pack.slotPlan) : legacyPack.slotPlan;
+      legacyPack.packCriteria = clone(next.packCriteria || {});
+      legacyPack.wildcardInputs = clone(next.wildcardInputs || {});
+      next.packs = [legacyPack];
+      next.ui.editingPackId = legacyPack.id;
+    }
+    if (!read("pack.slotPlan")) {
+      const legacyWildcardSlots = Number(read("pack.wildcardSlots") || 0);
+      const legacySlots = [];
+      const legacyPackSet = getPackSet(next);
+      (legacyPackSet?.rarities || []).forEach((r) => {
+        const fixed = Number(r.fixedSlots || 0);
+        for (let i = 0; i < fixed; i += 1) legacySlots.push(r.id);
+        next.packCriteria[r.id] = {
+          wildcardEligible: !!r.wildcardEligible,
+          minCopies: Number(r.minCopies || 0),
+          overrideMin: Number(r.overrideMin || 0)
+        };
+      });
+      for (let i = 0; i < legacyWildcardSlots; i += 1) legacySlots.push(WILDCARD_SLOT_ID);
+      next.pack.slotPlan = legacySlots.slice(0, Number(next.pack.cardsPerPack || 0));
+    }
+    ensurePackSelections(next);
+    syncPackLibraryFromActive(next);
+    syncPackConfiguration(next);
+    if (!next.ui.nudgePins || typeof next.ui.nudgePins !== "object") next.ui.nudgePins = {};
+
+    paths.forEach((path) => {
+      const before = read(path);
+      const after = readFromState(next, path);
+      const beforeStr = before === undefined ? "<missing>" : truncateForUi(before);
+      const afterStr = after === undefined ? "<missing>" : truncateForUi(after);
+      if (JSON.stringify(before) !== JSON.stringify(after)) {
+        changes.push(`${path}: ${beforeStr} -> ${afterStr}`);
+      }
+    });
+
+    return { state: next, changes };
+  }
+
+  function readFromState(obj, path) {
+    const parts = path.split(".");
+    let cur = obj;
+    for (const p of parts) {
+      if (cur == null) return undefined;
+      cur = cur[p];
+    }
+    return cur;
+  }
+
+  function inferRarityTier(rarity) {
+    const raw = `${rarity?.name || ""} ${rarity?.shortcode || ""}`.toLowerCase();
+    if (raw.includes("legend")) return "legendary";
+    if (raw.includes("elite")) return "elite";
+    if (raw.includes("rare")) return "rare";
+    if (raw.includes("uncommon") || raw.includes("unc")) return "uncommon";
+    if (raw.includes("common") || raw.includes("com")) return "common";
+    return "other";
+  }
+
+  function getSetPolicyChecks(packSet) {
+    const rarities = packSet?.rarities || [];
+    const tierCounts = { common: 0, uncommon: 0, rare: 0, elite: 0, legendary: 0, other: 0 };
+
+    rarities.forEach((r) => {
+      const tier = inferRarityTier(r);
+      tierCounts[tier] += Number(r.setCount || 0);
+    });
+
+    const eliteOk = tierCounts.elite >= 2;
+    const legendaryOk = tierCounts.legendary >= 1;
+    const checks = [
+      { label: "Set contains at least 2 Elite cards", ok: eliteOk, detail: `Detected Elite cards: ${tierCounts.elite}` },
+      { label: "Set contains at least 1 Legendary card", ok: legendaryOk, detail: `Detected Legendary cards: ${tierCounts.legendary}` }
+    ];
+
+    return { tierCounts, checks };
+  }
+
+  function getPolicyReferenceData() {
+    return {
+      dimensions: {
+        pack: { size: "2.6 x 3.6 x 0.12 in", weight: "12-14 g" },
+        box: { size: "7.5 x 5.0 x 2.75 in", weight: "1.0-1.2 lb" },
+        carton: { size: "18 x 14 x 12 in", weight: "6-7 lb" }
+      },
+      costEstimate: {
+        perPack: "$0.35-$0.55",
+        perBox: "$13-$20",
+        perCarton: "$80-$120",
+        perCard: "$0.04-$0.06"
+      },
+      msrpReference: {
+        pack: "$3.00",
+        box: "$105.00",
+        carton: "$620.00"
+      }
+    };
+  }
+
+  /* === REPORTING AND EXPORT === */
+  function buildReportPayload(result) {
+    const activePack = getPackRecordById(state, state.ui.editingPackId);
+    const packSet = getPackSet(state);
+    const packRarities = packSet?.rarities || [];
+    const rarityById = Object.fromEntries(packRarities.map((r) => [r.id, r]));
+    const rarityMap = Object.fromEntries(packRarities.map((r) => [r.id, r]));
+    const composition = getPackComposition(state);
+    const wildcardRows = packRarities
+      .filter((r) => state.packCriteria[r.id]?.wildcardEligible)
+      .map((r) => {
+        const raw = state.wildcardInputs[r.id] || "0";
+        const parsed = parseProbabilityInput(raw, state.ui.probInputMode);
+        const value = parsed.ok ? parsed.value : 0;
+        const frac = toFractionApprox(value, FRACTION_DENOM_CAP);
+        return {
+          rarity: r.name,
+          shortcode: r.shortcode,
+          input: raw,
+          decimal: value,
+          fraction: `${frac.n}/${frac.d}`,
+          approx: frac.approx
+        };
+      });
+
+    const fixedCountsByRarity = Object.entries(composition.countsByRarity || {}).map(([rarityId, count]) => {
+      const rarity = rarityById[rarityId] || {};
+      return {
+        rarity: String(rarity.name || "").trim() || "Unnamed Rarity",
+        shortcode: String(rarity.shortcode || "").trim() || "",
+        count: Number(count || 0)
+      };
+    });
+
+    const criteriaByRarity = packRarities.map((r) => {
+      const criteria = state.packCriteria[r.id] || makeDefaultPackCriteria();
+      return {
+        rarity: String(r.name || "").trim() || "Unnamed Rarity",
+        shortcode: String(r.shortcode || "").trim() || "",
+        wildcardEligible: !!criteria.wildcardEligible,
+        minCopies: Number(criteria.minCopies || 0),
+        overrideMin: Number(criteria.overrideMin || 0)
+      };
+    });
+
+    return {
+      metadata: {
+        timestamp: new Date().toISOString(),
+        appVersion: APP_VERSION,
+        schemaVersion: SCHEMA_VERSION
+      },
+      report: {
+        pack: {
+          id: activePack?.id || "",
+          name: activePack?.name || ""
+        },
+        set: {
+          id: packSet?.id || "",
+          name: packSet?.name || "",
+          totalCards: packSet?.totalCards || 0,
+          rarityTotal: packRarities.reduce((sum, r) => sum + Number(r.setCount || 0), 0)
+        },
+        rarityTable: result.ok ? result.totals.rows : [],
+        perCardCounts: result.ok && state.run.perCardOverrideMode ? result.totals.rows.map((r) => ({ shortcode: r.shortcode, perCard: r.perCard })) : [],
+        wildcardRules: wildcardRows,
+        packRules: {
+          cardsPerPack: state.pack.cardsPerPack,
+          slotPlan: state.pack.slotPlan.map((slot) => {
+            if (slot === WILDCARD_SLOT_ID) return "Wildcard";
+            if (!slot) return "Unassigned";
+            const rarity = rarityMap[slot];
+            if (!rarity) return "Unassigned";
+            const name = String(rarity.name || "").trim();
+            const code = String(rarity.shortcode || "").trim();
+            return name && code ? `${name} (${code})` : (name || code || "Unassigned");
+          }),
+          slotPlanLabels: state.pack.slotPlan.map((slot) => {
+            if (slot === WILDCARD_SLOT_ID) return "Wildcard";
+            if (!slot) return "Unassigned";
+            const rarity = rarityMap[slot];
+            return rarity ? (rarity.shortcode || rarity.name) : "Unassigned";
+          }),
+          wildcardSlots: composition.wildcardSlots,
+          fixedCountsByRarity,
+          criteriaByRarity
+        },
+        packaging: {
+          packsPerBox: state.pack.packsPerBox,
+          boxesPerCarton: state.pack.boxesPerCarton,
+          packsPerCarton: state.pack.packsPerBox * state.pack.boxesPerCarton,
+          cardsPerBox: state.pack.cardsPerPack * state.pack.packsPerBox,
+          cardsPerCarton: state.pack.cardsPerPack * state.pack.packsPerBox * state.pack.boxesPerCarton
+        },
+        policy: {
+          setChecks: getSetPolicyChecks(packSet),
+          reference: getPolicyReferenceData()
+        },
+        totals: result.ok ? {
+          totalCards: result.totals.totalCards,
+          totalPacks: result.totals.totalPacks
+        } : null,
+        priorities: state.rules.map((r, i) => ({ rank: i + 1, id: r.id, label: r.label }))
+      }
+    };
+  }
+
+  function buildHtmlReport(payload) {
+    const setChecks = payload.report.policy.setChecks;
+    const ref = payload.report.policy.reference;
+
+    const rarityRows = payload.report.rarityTable.map((row) => `
+      <tr>
+        <td>${escapeHtml(row.name)}</td>
+        <td>${escapeHtml(row.shortcode)}</td>
+        <td>${escapeHtml(String(row.cards))}</td>
+        <td>${escapeHtml(Number(row.perCard).toFixed(4))}</td>
+        <td>${escapeHtml(Number(row.percent).toFixed(4))}%</td>
+      </tr>
+    `).join("");
+
+    const wildcardRows = payload.report.wildcardRules.map((row) => `
+      <tr>
+        <td>${escapeHtml(row.rarity)}</td>
+        <td>${escapeHtml(row.shortcode)}</td>
+        <td>${escapeHtml(row.input)}</td>
+        <td>${escapeHtml(Number(row.decimal).toFixed(9))}</td>
+        <td>${escapeHtml(row.fraction)}${row.approx ? " (approx)" : ""}</td>
+      </tr>
+    `).join("");
+
+    const packRecipeRows = (payload.report.packRules.fixedCountsByRarity || []).map((row) => {
+      const label = row.shortcode
+        ? `${row.rarity} (${row.shortcode})`
+        : row.rarity;
+      return `
+      <tr>
+        <td>${escapeHtml(label)}</td>
+        <td>${escapeHtml(String(row.count))}</td>
+      </tr>
+    `;
+    }).join("");
+
+    const setCheckRows = (setChecks.checks || []).map((check) => `
+      <tr>
+        <td>${escapeHtml(check.label)}</td>
+        <td>${check.ok ? "PASS" : "REVIEW"}</td>
+        <td>${escapeHtml(check.detail)}</td>
+      </tr>
+    `).join("");
+
+    const priorityRows = payload.report.priorities.map((row) => `<li>${row.rank}. ${escapeHtml(row.label)}</li>`).join("");
+
+    return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CCG Builder Report</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 28px; color: #1f1b16; background: #faf7f1; line-height: 1.45; }
+    h1, h2, h3 { margin: 0 0 12px; }
+    h1 { font-size: 1.85rem; }
+    h2 { font-size: 1.2rem; }
+    h3 { font-size: 1rem; color: #6d230e; }
+    section { margin: 0 0 18px; padding: 14px 16px; background: #fffdf8; border: 1px solid #d8cab5; border-radius: 12px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid #eadfce; padding: 8px; text-align: left; }
+    th { background: #fdf3e5; }
+    .pass { color: #145328; font-weight: 700; }
+    .review { color: #7c4800; font-weight: 700; }
+    .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .k { font-size: 0.8rem; color: #564b3f; text-transform: uppercase; letter-spacing: 0.04em; }
+    .v { font-size: 1rem; font-weight: 700; }
+    .subgrid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .note { color: #564b3f; font-size: 0.92rem; }
+  </style>
+</head>
+<body>
+  <h1>CCG Builder Report</h1>
+  <section>
+    <div class="meta">
+      <div><div class="k">Pack</div><div class="v">${escapeHtml(payload.report.pack.name || "Untitled Pack")}</div></div>
+      <div><div class="k">Set</div><div class="v">${escapeHtml(payload.report.set.name)}</div></div>
+      <div><div class="k">Set Card Count</div><div class="v">${escapeHtml(String(payload.report.set.totalCards))}</div></div>
+      <div><div class="k">Run Size</div><div class="v">${escapeHtml(String(payload.report.totals.totalPacks))} packs</div></div>
+      <div><div class="k">Total Printed Cards</div><div class="v">${escapeHtml(String(payload.report.totals.totalCards))}</div></div>
+      <div><div class="k">Cards per Pack</div><div class="v">${escapeHtml(String(payload.report.packRules.cardsPerPack))}</div></div>
+      <div><div class="k">Packs per Box</div><div class="v">${escapeHtml(String(payload.report.packaging.packsPerBox))}</div></div>
+      <div><div class="k">Boxes per Carton</div><div class="v">${escapeHtml(String(payload.report.packaging.boxesPerCarton))}</div></div>
+      <div><div class="k">Generated</div><div class="v">${escapeHtml(payload.metadata.timestamp)}</div></div>
+      <div><div class="k">App Version</div><div class="v">${escapeHtml(payload.metadata.appVersion)}</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Booster Pack and Packaging Structure</h2>
+    <div class="subgrid">
+      <div>
+        <h3>Pack Recipe Snapshot</h3>
+        <table>
+          <thead><tr><th>Rarity</th><th>Fixed Slots per Pack</th></tr></thead>
+          <tbody>${packRecipeRows || '<tr><td colspan="2">No fixed rarity slots configured.</td></tr>'}</tbody>
+        </table>
+        <p class="note">Wildcard slots per pack: ${escapeHtml(String(payload.report.packRules.wildcardSlots))}</p>
+      </div>
+      <div>
+        <h3>Packaging Hierarchy</h3>
+        <table>
+          <tbody>
+            <tr><th>Cards per Pack</th><td>${escapeHtml(String(payload.report.packRules.cardsPerPack))}</td></tr>
+            <tr><th>Packs per Box</th><td>${escapeHtml(String(payload.report.packaging.packsPerBox))}</td></tr>
+            <tr><th>Boxes per Carton</th><td>${escapeHtml(String(payload.report.packaging.boxesPerCarton))}</td></tr>
+            <tr><th>Packs per Carton</th><td>${escapeHtml(String(payload.report.packaging.packsPerCarton))}</td></tr>
+            <tr><th>Cards per Box</th><td>${escapeHtml(String(payload.report.packaging.cardsPerBox))}</td></tr>
+            <tr><th>Cards per Carton</th><td>${escapeHtml(String(payload.report.packaging.cardsPerCarton))}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Rarity Totals</h2>
+    <table>
+      <thead><tr><th>Rarity</th><th>Code</th><th>Cards</th><th>Per Card</th><th>Yield %</th></tr></thead>
+      <tbody>${rarityRows}</tbody>
+    </table>
+  </section>
+  <section>
+    <h2>Wildcard Rules</h2>
+    <table>
+      <thead><tr><th>Rarity</th><th>Code</th><th>Input</th><th>Decimal</th><th>Fraction</th></tr></thead>
+      <tbody>${wildcardRows || '<tr><td colspan="5">No wildcard rules configured.</td></tr>'}</tbody>
+    </table>
+  </section>
+  <section>
+    <h2>Pack Definition and Wildcard Distribution</h2>
+    <p><strong>Cards per pack:</strong> ${escapeHtml(String(payload.report.packRules.cardsPerPack))}</p>
+    <p><strong>Slot plan:</strong> ${escapeHtml(payload.report.packRules.slotPlanLabels.join(", "))}</p>
+    <p><strong>Wildcard slots:</strong> ${escapeHtml(String(payload.report.packRules.wildcardSlots))}</p>
+    <p><strong>Packs per box:</strong> ${escapeHtml(String(payload.report.packaging.packsPerBox))}</p>
+    <p><strong>Boxes per carton:</strong> ${escapeHtml(String(payload.report.packaging.boxesPerCarton))}</p>
+    <p><strong>Packs per carton:</strong> ${escapeHtml(String(payload.report.packaging.packsPerCarton))}</p>
+  </section>
+
+  <section>
+    <h2>Set Policy Checks</h2>
+    <table>
+      <thead><tr><th>Rule</th><th>Status</th><th>Detail</th></tr></thead>
+      <tbody>${setCheckRows}</tbody>
+    </table>
+    <p class="note">Checks are evaluated against current set rarity data and policy baseline targets for Elite and Legendary minimums.</p>
+  </section>
+
+  <section>
+    <h2>Policy Reference Snapshot</h2>
+    <div class="subgrid">
+      <div>
+        <h3>Physical Specs (Reference)</h3>
+        <table>
+          <thead><tr><th>Unit</th><th>Approx. Size</th><th>Approx. Weight</th></tr></thead>
+          <tbody>
+            <tr><td>Booster Pack</td><td>${escapeHtml(ref.dimensions.pack.size)}</td><td>${escapeHtml(ref.dimensions.pack.weight)}</td></tr>
+            <tr><td>Booster Box</td><td>${escapeHtml(ref.dimensions.box.size)}</td><td>${escapeHtml(ref.dimensions.box.weight)}</td></tr>
+            <tr><td>Master Carton</td><td>${escapeHtml(ref.dimensions.carton.size)}</td><td>${escapeHtml(ref.dimensions.carton.weight)}</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <h3>Cost and MSRP References</h3>
+        <table>
+          <tbody>
+            <tr><th>Estimated Cost per Pack</th><td>${escapeHtml(ref.costEstimate.perPack)}</td></tr>
+            <tr><th>Estimated Cost per Box</th><td>${escapeHtml(ref.costEstimate.perBox)}</td></tr>
+            <tr><th>Estimated Cost per Carton</th><td>${escapeHtml(ref.costEstimate.perCarton)}</td></tr>
+            <tr><th>Estimated Cost per Card</th><td>${escapeHtml(ref.costEstimate.perCard)}</td></tr>
+            <tr><th>MSRP per Pack</th><td>${escapeHtml(ref.msrpReference.pack)}</td></tr>
+            <tr><th>MSRP per Box</th><td>${escapeHtml(ref.msrpReference.box)}</td></tr>
+            <tr><th>MSRP per Carton</th><td>${escapeHtml(ref.msrpReference.carton)}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <p class="note">Reference values above mirror policy guidance and should be reviewed against current vendor quotes and release strategy.</p>
+  </section>
+
+  <section>
+    <h2>Priority Rules</h2>
+    <ol>${priorityRows}</ol>
+  </section>
+</body>
+</html>`;
+  }
+
+  function downloadBlob(filename, type, data) {
+    const blob = new Blob([data], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function exportReport() {
+    const result = runCalculation(state);
+    if (!result.ok) {
+      renderErrors(result.validation);
+      focusErrorSummary();
+      return;
+    }
+    const payload = buildReportPayload(result);
+    const format = byId("reportFormat").value;
+
+    if (format === "json") {
+      const out = JSON.stringify(payload, null, 2);
+      downloadBlob("pack-report.json", "application/json", out);
+      return;
+    }
+
+    if (format === "txt") {
+      const lines = [];
+      lines.push("CCG Builder Report");
+      lines.push(`Set: ${payload.report.set.name}`);
+      lines.push(`Set total cards: ${payload.report.set.totalCards}`);
+      lines.push(`Generated: ${payload.metadata.timestamp}`);
+      lines.push(`App: ${payload.metadata.appVersion}`);
+      lines.push("");
+      payload.report.rarityTable.forEach((r) => {
+        lines.push(`${r.name} (${r.shortcode}) cards=${r.cards} perCard=${r.perCard.toFixed(4)} yield=${r.percent.toFixed(4)}%`);
+      });
+      downloadBlob("pack-report.txt", "text/plain", lines.join("\n"));
+      return;
+    }
+
+    const html = buildHtmlReport(payload);
+    downloadBlob("pack-report.html", "text/html", html);
+  }
+
+  /* === FILE I/O === */
+  async function pickFolder() {
+    if (!window.showDirectoryPicker) return;
+    pinnedDirectoryHandle = await window.showDirectoryPicker();
+    pinnedFolderDisplayPath = getPinnedFolderDisplayPath(pinnedDirectoryHandle);
+    state.pinnedFolderReady = true;
+    renderFileTab();
+    persistState();
+  }
+
+  async function saveConfigFile() {
+    const filename = byId("fileNameInput").value.trim() || "pack-config.json";
+    const data = JSON.stringify(state, null, 2);
+
+    if (utf8ByteLength(data) > MAX_JSON_BYTES) {
+      alert("Config exceeds max 5 MB UTF-8 byte size.");
+      return;
+    }
+
+    if (window.showSaveFilePicker && !pinnedDirectoryHandle) {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{ description: "JSON", accept: { "application/json": [".json"] } }]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(data);
+      await writable.close();
+      return;
+    }
+
+    if (pinnedDirectoryHandle) {
+      let exists = false;
+      try {
+        await pinnedDirectoryHandle.getFileHandle(filename, { create: false });
+        exists = true;
+      } catch (_e) {
+        exists = false;
+      }
+      if (exists) {
+        const proceed = window.confirm(`A file named ${filename} already exists in the pinned folder. Overwrite it?`);
+        if (!proceed) return;
+      }
+      const fileHandle = await pinnedDirectoryHandle.getFileHandle(filename, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(data);
+      await writable.close();
+      lastExplicitFileSyncHash = normalizedStateHash();
+      return;
+    }
+
+    downloadBlob(filename, "application/json", data);
+    lastExplicitFileSyncHash = normalizedStateHash();
+  }
+
+  async function openConfigFile() {
+    if (!maybeConfirmUnsavedBeforeOpen()) return;
+    if (window.showOpenFilePicker) {
+      const [handle] = await window.showOpenFilePicker({
+        types: [{ description: "JSON", accept: { "application/json": [".json"] } }],
+        multiple: false
+      });
+      if (!handle) return;
+      const file = await handle.getFile();
+      const text = await file.text();
+      loadJsonString(text);
+      return;
+    }
+
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json,application/json";
+    input.onchange = async () => {
+      if (!input.files || !input.files[0]) return;
+      const text = await input.files[0].text();
+      loadJsonString(text);
+    };
+    input.click();
+  }
+
+  function loadJsonString(text) {
+    if (utf8ByteLength(text) > MAX_JSON_BYTES) {
+      alert("JSON payload exceeds 5 MB UTF-8 byte limit.");
+      byId("configJson").value = "";
+      return;
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (_e) {
+      alert("Malformed JSON. Input cleared.");
+      byId("configJson").value = "";
+      return;
+    }
+
+    if (Array.isArray(parsed.rarities) && parsed.rarities.length > MAX_RARITY_COUNT) {
+      alert(`Rarity count exceeds limit (${MAX_RARITY_COUNT}).`);
+      byId("configJson").value = "";
+      return;
+    }
+    if (Array.isArray(parsed.sets) && parsed.sets.some((setDef) => Array.isArray(setDef.rarities) && setDef.rarities.length > MAX_RARITY_COUNT)) {
+      alert(`A set contains more than ${MAX_RARITY_COUNT} rarities.`);
+      byId("configJson").value = "";
+      return;
+    }
+
+    let migrated;
+    try {
+      migrated = migrateConfig(parsed);
+    } catch (_e) {
+      alert("JSON could not be migrated safely. Input cleared.");
+      byId("configJson").value = "";
+      return;
+    }
+
+    state = migrated.state;
+    const lines = migrated.changes.map((c) => `<li>${escapeHtml(c)}</li>`).join("");
+    state.ui.migrationNoticeHtml = migrated.changes.length
+      ? `<div class="status warn"><strong>Migration changes (field-by-field)</strong><ul>${lines}</ul></div>`
+      : statusLine("ok", "No migration changes required.");
+
+    pushHistory("load-json");
+    persistState();
+    lastExplicitFileSyncHash = normalizedStateHash();
+    renderAll();
+    scheduleRecalc();
+  }
+
+  /* === EVENTS === */
+  function bindEvents() {
+    byId("tabWelcome").addEventListener("click", () => setActiveTab("welcome"));
+    byId("tabRarities").addEventListener("click", () => setActiveTab("rarities"));
+    byId("tabPackEditor").addEventListener("click", () => setActiveTab("packEditor"));
+    byId("tabRules").addEventListener("click", () => setActiveTab("rules"));
+    byId("tabCalculator").addEventListener("click", () => setActiveTab("calculator"));
+    byId("tabConfig").addEventListener("click", () => setActiveTab("config"));
+    byId("tabFiles").addEventListener("click", () => setActiveTab("files"));
+    byId("goToRaritiesBtn").addEventListener("click", () => setActiveTab("rarities"));
+    byId("goToPackEditorBtn").addEventListener("click", () => setActiveTab("packEditor"));
+    byId("loadSetBtn").addEventListener("click", onLoadSet);
+    byId("loadPackBtn").addEventListener("click", onLoadPack);
+    byId("setPickerSelect").addEventListener("change", onSelectionDraftChange);
+    byId("packPickerSelect").addEventListener("change", onSelectionDraftChange);
+    byId("packSetSelect").addEventListener("change", onPackSetChange);
+    byId("createSetBtn").addEventListener("click", onAddSet);
+    byId("removeSetBtn").addEventListener("click", onRemoveSet);
+    byId("createPackBtn").addEventListener("click", onAddPack);
+    byId("removePackBtn").addEventListener("click", onRemovePack);
+    byId("copyPackToNewBtn").addEventListener("click", onCopyPackToNew);
+    byId("packName").addEventListener("input", onPackNameInput);
+    byId("packName").addEventListener("blur", onPackNameCommit);
+    ["setName", "setTotalCards"].forEach((id) => {
+      byId(id).addEventListener("input", onSetInput);
+      byId(id).addEventListener("blur", onSetInputCommit);
+    });
+
+    byId("addRarityBtn").addEventListener("click", () => {
+      const editingSet = getEditingSet(state);
+      const id = generateId("r");
+      editingSet.rarities.push({
+        id,
+        name: "",
+        shortcode: "",
+        setCount: 1
+      });
+      state.packCriteria[id] = makeDefaultPackCriteria();
+      state.wildcardInputs[id] = "0";
+      syncPackConfiguration(state);
+      pushHistory("add-rarity");
+      persistState();
+      renderAll();
+      scheduleRecalc();
+    });
+
+    byId("resetRaritiesBtn").addEventListener("click", () => {
+      const editingSet = getEditingSet(state);
+      editingSet.rarities.forEach((r) => {
+        delete state.packCriteria[r.id];
+        delete state.wildcardInputs[r.id];
+      });
+      editingSet.rarities = [];
+      state.packCriteria = {};
+      state.wildcardInputs = {};
+      state.pack.slotPlan = state.pack.slotPlan.map(() => "");
+      syncPackConfiguration(state);
+      pushHistory("reset-rarities");
+      persistState();
+      renderAll();
+      scheduleRecalc();
+    });
+
+    byId("rarityBody").addEventListener("input", onRarityInput);
+    byId("rarityBody").addEventListener("change", onRarityInputCommit);
+    byId("rarityBody").addEventListener("blur", onRarityInputCommit, true);
+    byId("rarityBody").addEventListener("click", onRarityRowClick);
+    byId("packSlotGrid").addEventListener("change", onPackSlotChange);
+    byId("packCriteriaBody").addEventListener("input", onPackCriteriaInput);
+    byId("packCriteriaBody").addEventListener("change", onPackCriteriaCommit);
+    byId("packCriteriaBody").addEventListener("blur", onPackCriteriaCommit, true);
+    byId("wildcardEligibilityList").addEventListener("change", onWildcardEligibilityChange);
+
+    ["cardsPerPack", "packsPerBox", "boxesPerCarton", "runPacks"].forEach((id) => {
+      byId(id).addEventListener("input", onPackInputLive);
+      byId(id).addEventListener("blur", onPackInputCommit);
+    });
+
+    byId("roundingPolicy").addEventListener("change", (e) => {
+      state.run.roundingPolicy = e.target.value;
+      pushHistory("rounding-policy");
+      persistState();
+      scheduleRecalc();
+    });
+
+    byId("perCardOverrideMode").addEventListener("change", (e) => {
+      state.run.perCardOverrideMode = e.target.checked;
+      pushHistory("per-card-override-mode");
+      persistState();
+      scheduleRecalc();
+    });
+
+    byId("probInputMode").addEventListener("change", (e) => {
+      state.ui.probInputMode = e.target.value;
+      pushHistory("prob-mode");
+      persistState();
+      renderWildcardTable();
+      scheduleRecalc();
+    });
+
+    byId("localeSelect").addEventListener("change", (e) => {
+      state.ui.locale = e.target.value;
+      pushHistory("locale");
+      persistState();
+      scheduleRecalc();
+    });
+
+    byId("wildcardBody").addEventListener("input", onWildcardTyping);
+    byId("wildcardBody").addEventListener("blur", onWildcardCommit, true);
+    byId("internals").addEventListener("click", onPerCardNudgeClick);
+    byId("internals").addEventListener("change", onPerCardPinChange);
+    byId("errorSummary").addEventListener("click", (e) => {
+      const role = e.target.dataset.role;
+      if (role !== "jump-error") return;
+      const key = e.target.dataset.key;
+      jumpToErrorField(key);
+    });
+
+    byId("snapToleranceBtn").addEventListener("click", snapToTolerance);
+
+    byId("resetPackagingBtn").addEventListener("click", () => {
+      state.pack.cardsPerPack = 10;
+      state.pack.packsPerBox = 36;
+      state.pack.boxesPerCarton = 6;
+      state.pack.slotPlan = Array.from({ length: 10 }, () => "");
+      syncPackConfiguration(state);
+      pushHistory("reset-packaging");
+      persistState();
+      renderAll();
+      scheduleRecalc();
+    });
+
+    byId("resetWildcardBtn").addEventListener("click", () => {
+      (getPackSet(state)?.rarities || []).filter((r) => state.packCriteria[r.id]?.wildcardEligible).forEach((r) => {
+        state.wildcardInputs[r.id] = "0";
+      });
+      pushHistory("reset-wildcards");
+      persistState();
+      renderAll();
+      scheduleRecalc();
+    });
+
+    byId("ruleList").addEventListener("click", onRuleMove);
+
+    byId("solveSmallest").addEventListener("click", () => {
+      state.run.packs = state.pack.packsPerBox;
+      pushHistory("solve-smallest");
+      persistState();
+      renderAll();
+      scheduleRecalc();
+    });
+
+    byId("solveBox").addEventListener("click", () => {
+      state.run.packs = state.pack.packsPerBox;
+      pushHistory("solve-box");
+      persistState();
+      renderAll();
+      scheduleRecalc();
+    });
+
+    byId("solveCarton").addEventListener("click", () => {
+      state.run.packs = state.pack.packsPerBox * state.pack.boxesPerCarton;
+      pushHistory("solve-carton");
+      persistState();
+      renderAll();
+      scheduleRecalc();
+    });
+
+    byId("solveSnap").addEventListener("click", () => {
+      const barrier = state.pack.packsPerBox * state.pack.boxesPerCarton;
+      state.run.packs = Math.ceil(state.run.packs / barrier) * barrier;
+      pushHistory("solve-snap");
+      persistState();
+      renderAll();
+      scheduleRecalc();
+    });
+
+    byId("recalcBtn").addEventListener("click", () => scheduleRecalc(true));
+    byId("undoBtn").addEventListener("click", undo);
+    byId("redoBtn").addEventListener("click", redo);
+
+    byId("resetAllBtn").addEventListener("click", () => {
+      state = makeDefaultState();
+      pushHistory("reset-all");
+      persistState();
+      renderAll();
+      scheduleRecalc();
+    });
+
+    byId("generateJsonBtn").addEventListener("click", () => {
+      byId("configJson").value = JSON.stringify(state, null, 2);
+      setActiveTab("config");
+    });
+
+    byId("loadJsonBtn").addEventListener("click", () => {
+      loadJsonString(byId("configJson").value);
+    });
+
+    byId("clearJsonBtn").addEventListener("click", () => {
+      byId("configJson").value = "";
+      state.ui.migrationNoticeHtml = "";
+      byId("migrationNotice").innerHTML = "";
+      persistState();
+    });
+
+    byId("pickFolderBtn").addEventListener("click", async () => {
+      try {
+        await pickFolder();
+      } catch (_e) {
+        alert("Could not pick folder.");
+      }
+    });
+
+    byId("clearFolderBtn").addEventListener("click", () => {
+      pinnedDirectoryHandle = null;
+      pinnedFolderDisplayPath = "";
+      renderFileTab();
+    });
+
+    byId("saveConfigBtn").addEventListener("click", async () => {
+      try {
+        await saveConfigFile();
+      } catch (_e) {
+        alert("Save failed.");
+      }
+    });
+
+    byId("openConfigBtn").addEventListener("click", async () => {
+      try {
+        await openConfigFile();
+      } catch (_e) {
+        alert("Open failed.");
+      }
+    });
+
+    byId("exportReportBtn").addEventListener("click", exportReport);
+
+    window.addEventListener("keydown", (e) => {
+      const zKey = e.key.toLowerCase() === "z";
+      const cmdOrCtrl = e.metaKey || e.ctrlKey;
+      if (cmdOrCtrl && zKey && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      }
+      if (cmdOrCtrl && zKey && e.shiftKey) {
+        e.preventDefault();
+        redo();
+      }
+    });
+  }
+
+  function onSelectionDraftChange() {
+    persistState();
+  }
+
+  function onLoadSet() {
+    state.ui.editingSetId = byId("setPickerSelect").value;
+    ensureSetSelections(state);
+    pushHistory("set-commit");
+    persistState();
+    renderAll();
+    scheduleRecalc();
+  }
+
+  function onLoadPack() {
+    syncPackLibraryFromActive(state);
+    loadActivePackFromLibrary(state, byId("packPickerSelect").value);
+    pushHistory("pack-select");
+    persistState();
+    renderAll();
+    scheduleRecalc();
+  }
+
+  function onPackNameInput() {
+    const activePack = getPackRecordById(state, state.ui.editingPackId);
+    if (!activePack) return;
+    activePack.name = byId("packName").value;
+    persistState();
+    renderPackSelectors();
+    renderSetSelectors();
+  }
+
+  function onPackNameCommit() {
+    pushHistory("pack-name-commit");
+  }
+
+  function onAddPack() {
+    syncPackLibraryFromActive(state);
+    const newPack = makeDefaultPack(state.pack.setId || state.sets[0].id);
+    state.packs.push(newPack);
+    loadActivePackFromLibrary(state, newPack.id);
+    pushHistory("add-pack");
+    persistState();
+    renderAll();
+    scheduleRecalc();
+  }
+
+  function onRemovePack() {
+    syncPackLibraryFromActive(state);
+    if (!Array.isArray(state.packs) || state.packs.length <= 1) return;
+    const removeId = state.ui.editingPackId;
+    state.packs = state.packs.filter((packDef) => packDef.id !== removeId);
+    const nextId = state.packs[0].id;
+    loadActivePackFromLibrary(state, nextId);
+    pushHistory("remove-pack");
+    persistState();
+    renderAll();
+    scheduleRecalc();
+  }
+
+  function onCopyPackToNew() {
+    syncPackLibraryFromActive(state);
+    const activePack = getPackRecordById(state, state.ui.editingPackId);
+    if (!activePack) return;
+    const targetSetId = byId("copyPackSetSelect").value || activePack.setId;
+    const copy = normalizePackRecord({
+      ...clone(activePack),
+      id: generateId("pack"),
+      name: activePack.name ? `${activePack.name} Copy` : "Copied Pack",
+      setId: targetSetId
+    }, targetSetId);
+    remapPackRulesToSet(state, copy, activePack.setId, targetSetId);
+    state.packs.push(copy);
+    loadActivePackFromLibrary(state, copy.id);
+    pushHistory("copy-pack");
+    persistState();
+    renderAll();
+    scheduleRecalc();
+  }
+
+  function onPackSetChange(e) {
+    state.pack.setId = e.target.value;
+    syncPackConfiguration(state);
+    sortPackSlotPlan(state);
+    pushHistory("pack-set-change");
+    persistState();
+    renderAll();
+    scheduleRecalc();
+  }
+
+  function onAddSet() {
+    const setDef = makeDefaultSet();
+    state.sets.push(setDef);
+    state.ui.editingSetId = setDef.id;
+    ensureSetSelections(state);
+    pushHistory("add-set");
+    persistState();
+    renderAll();
+  }
+
+  function onRemoveSet() {
+    syncPackLibraryFromActive(state);
+    if (state.sets.length <= 1) return;
+    const editingSet = getEditingSet(state);
+    const removedSetId = editingSet.id;
+    editingSet.rarities.forEach((r) => {
+      delete state.packCriteria[r.id];
+      delete state.wildcardInputs[r.id];
+    });
+    state.sets = state.sets.filter((setDef) => setDef.id !== editingSet.id);
+    ensureSetSelections(state);
+    const fallbackSetId = state.sets[0].id;
+    state.packs.forEach((packDef) => {
+      if (packDef.setId === removedSetId) {
+        packDef.setId = fallbackSetId;
+      }
+    });
+    state.pack.slotPlan = state.pack.slotPlan.map((slot) => (getPackSet(state)?.rarities || []).some((r) => r.id === slot) || slot === WILDCARD_SLOT_ID ? slot : "");
+    syncPackConfiguration(state);
+    syncPackLibraryFromActive(state);
+    pushHistory("remove-set");
+    persistState();
+    renderAll();
+    scheduleRecalc();
+  }
+
+  function onRarityInput(e) {
+    const role = e.target.dataset.role;
+    const id = e.target.dataset.id;
+    if (!role || !id) return;
+    const editingSet = getEditingSet(state);
+    const rarity = editingSet.rarities.find((r) => r.id === id);
+    if (!rarity) return;
+
+    if (role === "rarity-name") rarity.name = e.target.value;
+    if (role === "rarity-shortcode") rarity.shortcode = e.target.value;
+    if (role === "rarity-setCount") rarity.setCount = Number(e.target.value || 0);
+
+    syncPackConfiguration(state);
+  sortPackSlotPlan(state);
+    persistState();
+    renderPackBuilder();
+    renderWildcardTable();
+    scheduleRecalc();
+  }
+
+  function onSetInput() {
+    const editingSet = getEditingSet(state);
+    editingSet.name = byId("setName").value;
+    editingSet.totalCards = Number(byId("setTotalCards").value || 0);
+    persistState();
+    renderSetSelectors();
+    renderPackSelectors();
+    renderRarityTable();
+    scheduleRecalc();
+  }
+
+  function onSetInputCommit() {
+    pushHistory("set-commit");
+  }
+
+  function onRarityInputCommit() {
+    pushHistory("rarity-commit");
+  }
+
+  function onRarityRowClick(e) {
+    const role = e.target.dataset.role;
+    if (role !== "rarity-delete") return;
+    const id = e.target.dataset.id;
+    const editingSet = getEditingSet(state);
+    editingSet.rarities = editingSet.rarities.filter((r) => r.id !== id);
+    delete state.packCriteria[id];
+    delete state.wildcardInputs[id];
+    state.pack.slotPlan = state.pack.slotPlan.map((slot) => (slot === id ? "" : slot));
+    syncPackConfiguration(state);
+    sortPackSlotPlan(state);
+    pushHistory("rarity-delete");
+    persistState();
+    renderAll();
+    scheduleRecalc();
+  }
+
+  function onPackInputLive() {
+    state.pack.cardsPerPack = Number(byId("cardsPerPack").value || 0);
+    state.pack.packsPerBox = Number(byId("packsPerBox").value || 0);
+    state.pack.boxesPerCarton = Number(byId("boxesPerCarton").value || 0);
+    state.run.packs = Number(byId("runPacks").value || 0);
+    syncPackConfiguration(state);
+    sortPackSlotPlan(state);
+    persistState();
+    renderPackBuilder();
+    renderWildcardTable();
+    scheduleRecalc();
+  }
+
+  function onPackInputCommit() {
+    pushHistory("pack-commit");
+  }
+
+  function onPackSlotChange(e) {
+    const role = e.target.dataset.role;
+    if (role !== "pack-slot") return;
+    const index = Number(e.target.dataset.index);
+    state.pack.slotPlan[index] = e.target.value;
+    syncPackConfiguration(state);
+    sortPackSlotPlan(state);
+    pushHistory("pack-slot-change");
+    persistState();
+    renderPackBuilder();
+    renderWildcardTable();
+    scheduleRecalc();
+  }
+
+  function onPackCriteriaInput(e) {
+    const role = e.target.dataset.role;
+    const id = e.target.dataset.id;
+    if (!role || !id || !state.packCriteria[id]) return;
+
+    if (role === "criteria-minCopies") state.packCriteria[id].minCopies = Number(e.target.value || 0);
+    if (role === "criteria-overrideMin") state.packCriteria[id].overrideMin = Number(e.target.value || 0);
+
+    persistState();
+    renderWildcardTable();
+    scheduleRecalc();
+  }
+
+  function onPackCriteriaCommit() {
+    pushHistory("pack-criteria-commit");
+  }
+
+  function onWildcardEligibilityChange(e) {
+    const role = e.target.dataset.role;
+    const id = e.target.dataset.id;
+    if (role !== "wildcard-eligibility" || !id || !state.packCriteria[id]) return;
+
+    state.packCriteria[id].wildcardEligible = e.target.checked;
+    if (!e.target.checked) {
+      state.wildcardInputs[id] = "0";
+      state.validationDraft.wildcardDirty[id] = false;
+    }
+
+    pushHistory("wildcard-eligibility");
+    persistState();
+    renderWildcardTable();
+    scheduleRecalc();
+  }
+
+  function onWildcardTyping(e) {
+    const role = e.target.dataset.role;
+    if (role !== "wildcard-input") return;
+    const id = e.target.dataset.id;
+    state.wildcardInputs[id] = e.target.value;
+    state.validationDraft.wildcardDirty[id] = true;
+    persistState();
+    renderWildcardFeedback();
+  }
+
+  function onWildcardCommit(e) {
+    const role = e.target.dataset.role;
+    if (role !== "wildcard-input") return;
+    const id = e.target.dataset.id;
+    state.validationDraft.wildcardDirty[id] = false;
+    state.wildcardInputs[id] = trimLeadingZerosSafe(state.wildcardInputs[id], state.ui.probInputMode);
+    const parsed = parseProbabilityInput(state.wildcardInputs[id], state.ui.probInputMode);
+    if (!parsed.ok) {
+      renderWildcardTable();
+      scheduleRecalc();
+      return;
+    }
+    pushHistory("wildcard-commit");
+    persistState();
+    renderWildcardTable();
+    scheduleRecalc();
+  }
+
+  function onRuleMove(e) {
+    const role = e.target.dataset.role;
+    const id = e.target.dataset.id;
+    if (!role || !id) return;
+
+    const idx = state.rules.findIndex((r) => r.id === id);
+    if (idx < 0) return;
+
+    if (role === "rule-up" && idx > 0) {
+      const tmp = state.rules[idx - 1];
+      state.rules[idx - 1] = state.rules[idx];
+      state.rules[idx] = tmp;
+    }
+    if (role === "rule-down" && idx < state.rules.length - 1) {
+      const tmp = state.rules[idx + 1];
+      state.rules[idx + 1] = state.rules[idx];
+      state.rules[idx] = tmp;
+    }
+
+    pushHistory("rule-reorder");
+    persistState();
+    renderRules();
+    scheduleRecalc();
+  }
+
+  function snapToTolerance() {
+    const eligibles = (getPackSet(state)?.rarities || []).filter((r) => state.packCriteria[r.id]?.wildcardEligible);
+    if (!eligibles.length) return;
+
+    const parsedRows = eligibles.map((r, idx) => {
+      const p = parseProbabilityInput(state.wildcardInputs[r.id] || "0", state.ui.probInputMode);
+      return { rarity: r, idx, value: p.ok ? p.value : 0, valid: p.ok };
+    });
+
+    const sum = parsedRows.reduce((s, row) => s + row.value, 0);
+    const remainder = 1 - sum;
+
+    parsedRows.sort((a, b) => {
+      if (b.value !== a.value) return b.value - a.value;
+      return a.idx - b.idx;
+    });
+
+    const target = parsedRows[0];
+    const nextValue = target.value + remainder;
+    if (nextValue < -TOLERANCE || nextValue > 1 + TOLERANCE) {
+      alert("Snap to Tolerance could not apply safely to the highest-probability row.");
+      return;
+    }
+
+    if (state.ui.probInputMode === "fraction") {
+      const f = toFractionApprox(nextValue, FRACTION_DENOM_CAP);
+      state.wildcardInputs[target.rarity.id] = `${f.n}/${f.d}`;
+    } else {
+      state.wildcardInputs[target.rarity.id] = String(nextValue);
+    }
+
+    pushHistory("snap-tolerance");
+    persistState();
+    renderWildcardTable();
+    scheduleRecalc();
+  }
+
+  function focusErrorSummary() {
+    byId("errorSummary").focus();
+  }
+
+  function getPerCardForRunPacks(rarityId, packs) {
+    if (!Number.isFinite(packs) || packs < 1) return null;
+    const trial = clone(state);
+    trial.run.packs = Math.max(1, Math.round(packs));
+    const result = runCalculation(trial);
+    if (!result.ok) return null;
+    const row = result.totals.rows.find((r) => r.rarityId === rarityId);
+    return row ? row.perCard : null;
+  }
+
+  function findRunPacksForPerCardNudge(rarityId, targetPerCard, direction) {
+    const basePacks = Math.max(1, Math.round(Number(state.run.packs || 1)));
+    const currentPerCard = getPerCardForRunPacks(rarityId, basePacks);
+    if (!Number.isFinite(currentPerCard)) return null;
+
+    if (direction > 0) {
+      let low = basePacks + 1;
+      let high = Math.max(low, Math.ceil(basePacks * (targetPerCard / Math.max(currentPerCard, TOLERANCE))));
+      let highVal = getPerCardForRunPacks(rarityId, high);
+      let guard = 0;
+      while (Number.isFinite(highVal) && highVal + TOLERANCE < targetPerCard && high < 1000000 && guard < 24) {
+        high *= 2;
+        highVal = getPerCardForRunPacks(rarityId, high);
+        guard += 1;
+      }
+      if (!Number.isFinite(highVal) || highVal + TOLERANCE < targetPerCard) return null;
+
+      while (low < high) {
+        const mid = Math.floor((low + high) / 2);
+        const midVal = getPerCardForRunPacks(rarityId, mid);
+        if (!Number.isFinite(midVal)) return null;
+        if (midVal + TOLERANCE >= targetPerCard) {
+          high = mid;
+        } else {
+          low = mid + 1;
+        }
+      }
+      return low;
+    }
+
+    let low = 1;
+    let high = Math.max(1, basePacks - 1);
+    if (high < 1) return null;
+
+    const lowVal = getPerCardForRunPacks(rarityId, low);
+    if (!Number.isFinite(lowVal)) return null;
+    if (lowVal - TOLERANCE > targetPerCard) return null;
+
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      const midVal = getPerCardForRunPacks(rarityId, mid);
+      if (!Number.isFinite(midVal)) return null;
+      if (midVal - TOLERANCE <= targetPerCard) {
+        low = mid;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return low;
+  }
+
+  function onPerCardNudgeClick(e) {
+    const role = e.target.dataset.role;
+    if (role !== "percard-nudge") return;
+
+    const rarityId = e.target.dataset.rarityId;
+    const direction = Number(e.target.dataset.dir);
+    if (!rarityId || !Number.isFinite(direction) || ![-1, 1].includes(direction)) return;
+
+    const current = runCalculation(state);
+    if (!current.ok) {
+      renderErrors(current.validation);
+      focusErrorSummary();
+      return;
+    }
+
+    const row = current.totals.rows.find((r) => r.rarityId === rarityId);
+    if (!row) return;
+
+    const composition = getPackComposition(state);
+    const wildcardSlots = Number(composition.wildcardSlots || 0);
+    if (wildcardSlots < 1) {
+      alert("Per-card nudging requires at least one wildcard slot so ratios can be redistributed.");
+      return;
+    }
+
+    const packSet = getPackSet(state);
+    const rarities = packSet?.rarities || [];
+    const rarityById = Object.fromEntries(rarities.map((r) => [r.id, r]));
+    const targetRarity = rarityById[rarityId];
+    if (!targetRarity) return;
+
+    const targetCriteria = state.packCriteria[rarityId] || makeDefaultPackCriteria();
+    if (!targetCriteria.wildcardEligible) {
+      alert("Per-card nudging can only adjust wildcard-eligible rarities.");
+      return;
+    }
+
+    const pins = state.ui.nudgePins || {};
+    if (pins[rarityId]) {
+      alert("This rarity is pinned. Unpin it before nudging.");
+      return;
+    }
+
+    const donorIds = rarities
+      .filter((r) => {
+        if (r.id === rarityId) return false;
+        if (pins[r.id]) return false;
+        const criteria = state.packCriteria[r.id] || makeDefaultPackCriteria();
+        return !!criteria.wildcardEligible;
+      })
+      .map((r) => r.id);
+
+    if (!donorIds.length) {
+      alert("No unpinned wildcard-eligible rarities are available to absorb that nudge.");
+      return;
+    }
+
+    const runPacks = Math.max(1, Number(state.run.packs || 1));
+    const slotMass = wildcardSlots * runPacks;
+    const cardStep = 1 * direction;
+    const probDelta = cardStep / Math.max(slotMass, TOLERANCE);
+
+    const targetInput = state.wildcardInputs[rarityId] ?? "0";
+    const targetParsed = parseProbabilityInput(targetInput, state.ui.probInputMode);
+    const targetProb = targetParsed.ok ? targetParsed.value : 0;
+    const nextTargetProb = targetProb + probDelta;
+
+    if (nextTargetProb < -TOLERANCE || nextTargetProb > 1 + TOLERANCE) {
+      showToast("error", "That nudge would move wildcard probability outside 0-1.");
+      return;
+    }
+
+    const donorParsed = donorIds.map((id) => {
+      const parsed = parseProbabilityInput(state.wildcardInputs[id] ?? "0", state.ui.probInputMode);
+      return { id, prob: parsed.ok ? parsed.value : 0 };
+    });
+    const donorTotal = donorParsed.reduce((sum, d) => sum + d.prob, 0);
+    if (donorTotal <= TOLERANCE) {
+      alert("No donor probability is available among unpinned rarities to apply this nudge.");
+      return;
+    }
+
+    const nextProbs = new Map();
+    nextProbs.set(rarityId, nextTargetProb);
+    let invalid = false;
+    donorParsed.forEach((d) => {
+      const share = d.prob / donorTotal;
+      const nextProb = d.prob - (probDelta * share);
+      if (nextProb < -TOLERANCE || nextProb > 1 + TOLERANCE) invalid = true;
+      nextProbs.set(d.id, nextProb);
+    });
+
+    if (invalid) {
+      showToast("error", "Nudge would push a wildcard donor probability outside 0-1.");
+      return;
+    }
+
+    nextProbs.forEach((prob, id) => {
+      const clamped = Math.min(1, Math.max(0, prob));
+      if (state.ui.probInputMode === "fraction") {
+        const frac = toFractionApprox(clamped, FRACTION_DENOM_CAP);
+        state.wildcardInputs[id] = `${frac.n}/${frac.d}`;
+      } else {
+        state.wildcardInputs[id] = String(clamped);
+      }
+    });
+
+    pushHistory("nudge-per-card");
+    persistState();
+    renderAll();
+    scheduleRecalc();
+  }
+
+  function onPerCardPinChange(e) {
+    const role = e.target.dataset.role;
+    if (role !== "percard-pin") return;
+    const rarityId = e.target.dataset.rarityId;
+    if (!rarityId) return;
+    if (!state.ui.nudgePins || typeof state.ui.nudgePins !== "object") {
+      state.ui.nudgePins = {};
+    }
+    state.ui.nudgePins[rarityId] = !!e.target.checked;
+    persistState();
+  }
+
+  /* === CALC SCHEDULER === */
+  function scheduleRecalc(forceFocusErrors = false) {
+    const token = ++calcToken;
+    byId("calcStatus").value = "Calculating...";
+
+    queueMicrotask(() => {
+      if (token !== calcToken) return;
+      const result = runCalculation(state);
+      renderErrors(result.validation || validateState(state, true));
+      renderSummary(result);
+      if (forceFocusErrors && !result.ok) {
+        focusErrorSummary();
+      }
+      persistState();
+    });
+  }
+
+  /* === TABS AND ALERTS === */
+  function setActiveTab(tab) {
+    state.ui.activeTab = tab;
+    renderTabs();
+    persistState();
+  }
+
+  function showGlobal(html) {
+    byId("globalAlert").innerHTML = html;
+  }
+
+  function showToast(type, text, durationMs = 2800) {
+    let host = byId("toastHost");
+    if (!host) {
+      host = document.createElement("div");
+      host.id = "toastHost";
+      host.className = "toast-host";
+      host.setAttribute("aria-live", "polite");
+      host.setAttribute("aria-atomic", "false");
+      document.body.appendChild(host);
+    }
+
+    const toast = document.createElement("div");
+    toast.className = `toast ${type}`;
+    toast.textContent = String(text || "");
+    host.appendChild(toast);
+
+    requestAnimationFrame(() => toast.classList.add("show"));
+
+    setTimeout(() => {
+      toast.classList.remove("show");
+      setTimeout(() => {
+        toast.remove();
+      }, 180);
+    }, Math.max(600, Number(durationMs) || 2800));
+  }
+
+  function checkFeaturesOnce() {
+    const alreadyAlerted = localStorage.getItem(STORAGE_ALERT_KEY) === "1";
+    if (alreadyAlerted) return;
+    const missing = [];
+    if (!window.localStorage) missing.push("localStorage");
+    if (!window.showDirectoryPicker) missing.push("File System Access API");
+    if (missing.length) {
+      showGlobal(statusLine("warn", `Limited feature mode: ${missing.join(", ")} unavailable.`));
+    } else {
+      showGlobal(statusLine("ok", "All optional browser features are available."));
+    }
+    localStorage.setItem(STORAGE_ALERT_KEY, "1");
+    localStorage.setItem(STORAGE_PINNED_DIR_KEY, String(!!window.showDirectoryPicker));
+  }
+
+  /* === INITIALIZATION === */
+  function initialize() {
+    loadPersistedState();
+    renderAll();
+    bindEvents();
+    checkFeaturesOnce();
+    pushHistory("init");
+    scheduleRecalc();
+  }
+
+  initialize();
+  
