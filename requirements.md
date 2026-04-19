@@ -17,7 +17,11 @@
 2. The banner must inform the user that no data ever leaves the browser.
 3. Users must be able to dismiss the banner via a button.
 4. Banner dismissal must be persisted to `localStorage` (`rcpc.packcalc.privacyNoticeDismissed`) so it does not reappear after reload.
-5. The Welcome tab must also contain a written privacy notice, independent of the dismissible banner.
+5. The app must display a local-storage/GDPR transparency notice with dismiss persistence (`rcpc.packcalc.gdprNoticeDismissed`).
+6. The Action Stack "Show Notices" action must restore both notices.
+7. The app must display a blocking personal/commercial license gate overlay until the user acknowledges personal use.
+8. License acknowledgment must persist (`rcpc.packcalc.licenseAcknowledged`), and restoring notices must be able to re-show the license gate.
+9. The Welcome tab must also contain a written privacy/license summary independent of dismissible banners.
 
 ---
 
@@ -82,6 +86,13 @@
 6. Sum of all rarity set card counts must equal the declared total card count (blocking error, only checked when total ≥ 1).
 7. Rarity count must not exceed 127 (blocking error).
 
+### Rarity Colors
+1. Each rarity must have a `colorId` selected from a fixed 16-color, theme-safe palette.
+2. New rarities must be auto-assigned a color chosen to maximize distinction from colors already used in the set.
+3. The top 5 default palette entries must be strongly distinct from each other.
+4. The Set Editor must expose color selection via a palette dropdown (no arbitrary free-form color input).
+5. Rarity color must be carried through state, migration normalization, and all render surfaces where the rarity appears.
+
 ---
 
 ## 8. Pack Editor Validation
@@ -124,16 +135,22 @@
 3. Validation only blocks calculation on blur or explicit recalculate — not while typing.
 
 ### Table Column Layout
-The wildcard table columns are, in order: **Rarity | Pin | Numerator | Denominator | LCD | Reduced Fraction | Status**.
+The wildcard table columns are, in order: **Rarity | Pin | Fraction | LCD | Reduced Fraction | Status**.
+
+### Fraction / LCD / Reduced Displays
+1. Fraction, LCD, and Reduced columns must render as stacked fractions (numerator over denominator) with a divider bar.
+2. Each stacked column must also display a percentage (`x.x%`) rounded to 1 decimal place.
 
 ### Numerator/Denominator Controls
-1. Each eligible rarity row has separate numerator and denominator plain-text inputs.
-2. These fields have no nudge buttons. The user types values directly; the displayed LCD and Reduced Fraction columns update on commit.
+1. Fraction numerator and denominator each have ±1 nudge controls.
+2. LCD numerator and denominator each have ±1 nudge controls.
+3. Nudges must follow the same redistribution and validity rules as other wildcard adjustments.
 
 ### LCD Column
 1. The Least Common Denominator (LCD) is computed across all currently valid eligible rows: the LCM of all reduced denominators.
 2. Each row shows its probability expressed as `numerator/LCD`, giving a uniform denominator so all rows can be visually compared at a glance.
-3. The ±1 nudge buttons in the LCD column adjust the row's LCD-numerator by 1 step (i.e. the probability changes by exactly `1/LCD`).
+3. LCD numerator ±1 nudges adjust by exactly `1/LCD`.
+4. LCD denominator ±1 nudges recompute that row probability as `lcdNumerator/(lcd±1)`.
 4. After a nudge the app redistributes the probability delta proportionally among all unpinned eligible rows to preserve sum=1.
 5. If the nudge would push the row outside [0, 1] before redistribution, it is blocked with a toast.
 
@@ -149,6 +166,7 @@ The wildcard table columns are, in order: **Rarity | Pin | Numerator | Denominat
 3. A final rebalance pass corrects any floating-point remainder, applied to the first donor.
 4. If redistribution is mathematically impossible (no donors, insufficient donor mass, no room), the nudge remains applied to the target row, the row is marked pending-invalid, and a toast notification informs the user of the specific reason.
 5. After successful redistribution, all adjusted rows are normalized to reduced fractions internally (stored as canonical `n/d`), their dirty/pending-invalid flags are cleared, and the LCD and Reduced Fraction display columns update.
+6. Validation and rebalance must account for pinned rows in total-sum checks even though pinned rows are not adjusted.
 
 ### Snap to Tolerance
 1. "Snap to Tolerance" adjusts the highest-probability eligible row by the current sum remainder to force the total exactly to 1.0.
@@ -217,6 +235,10 @@ The wildcard table columns are, in order: **Rarity | Pin | Numerator | Denominat
 5. On open, if the user has unsaved local changes since the last explicit save/load, the app prompts before replacing current state.
 6. Config is saved as JSON. The filename defaults to `pack-config.json` but is user-editable.
 7. "Last explicit file sync hash" is tracked to determine whether unsaved changes exist; it is computed from a normalized state clone (timestamp excluded).
+8. Files tab must separate File Picker/Config IO from Report Export into distinct sections/cards.
+9. Files tab must teach the step order explicitly (filename -> folder optional -> open/save -> export).
+10. Full-path display for pinned folder must be shown in-panel (not only truncated input presentation).
+11. Local data and full file mode notices must show explicit visual pass/fail states (green check vs red X).
 
 ---
 
@@ -264,7 +286,9 @@ The wildcard table columns are, in order: **Rarity | Pin | Numerator | Denominat
 
 1. Ten default priority rules are defined covering pack composition, production ranges, packaging barriers, per-card overrides, run minimization, wildcard distribution, exact total, rarity drift, rarity minimums, and strict bounds.
 2. Rules can be reordered using Up/Down controls. Order affects tradeoff resolution in strict rounding mode and is included in reports.
-3. Two rule groupings are displayed as badges: Foundational Pair (`fp`) and Tradeoff Cluster (`tc`).
+3. Two rule groupings are displayed as badges: Choice 1 (`fp`) and Choice 2 (`tc`).
+4. Rule rows must animate movement when reordered via Up/Down controls.
+5. Choice 1 and Choice 2 badges must be visually distinct.
 
 ---
 

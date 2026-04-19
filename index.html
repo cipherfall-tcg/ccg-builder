@@ -175,10 +175,11 @@
           <table aria-label="Rarity definitions">
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Shortcode</th>
-                <th>Set Cards</th>
-                <th>Actions</th>
+                <th title="Display name of the rarity tier.">Name</th>
+                <th title="Short code used in reports and compact views.">Shortcode</th>
+                <th title="Visual color assigned to this rarity across the app.">Color</th>
+                <th title="Total number of cards in this rarity within the active set.">Set Cards</th>
+                <th title="Row-level actions for this rarity.">Actions</th>
               </tr>
             </thead>
             <tbody id="rarityBody"></tbody>
@@ -262,8 +263,8 @@
             <table aria-label="Pack criteria by rarity">
               <thead>
                 <tr>
-                  <th>Rarity</th>
-                  <th>Slots in Pack</th>
+                  <th title="Rarity tier this row applies to.">Rarity</th>
+                  <th title="How many fixed slots of this rarity are currently in the pack plan.">Slots in Pack</th>
                   <th title="Minimum number of slots of this rarity that must be filled per pack (in normal mode). The total floor = this value × the rarity's set count.">Min Copies / Pack</th>
                   <th title="Alternative minimum used when &quot;Per-Card Override Mode&quot; is toggled on in the Calculator tab. Replaces Min Copies / Pack for the floor calculation.">Override Min <abbr aria-label="used only when Per-Card Override Mode is active">(override)</abbr></th>
                 </tr>
@@ -277,12 +278,6 @@
           <h2>Step 4 - Wildcard Ratios</h2>
           <p class="hint">Enable wildcard-eligible rarities here. Only enabled rarities get probability line items below.</p>
           <div class="row">
-            <div class="field sm-4">
-              <label for="probInputMode">Wildcard input format</label>
-              <select id="probInputMode">
-                <option value="fraction">Fraction-first (a/b, decimal, % all normalize)</option>
-              </select>
-            </div>
             <div class="field sm-4">
               <label for="localeSelect">Number format locale</label>
               <select id="localeSelect"></select>
@@ -303,12 +298,12 @@
             <table aria-label="Wildcard ratios">
               <thead>
                 <tr>
-                  <th>Rarity</th>
-                  <th>Pin</th>
-                  <th>Fraction</th>
-                  <th>LCD</th>
-                  <th>Reduced Fraction</th>
-                  <th>Status</th>
+                  <th title="Wildcard-eligible rarity this probability row controls.">Rarity</th>
+                  <th title="Pin this row to prevent redistribution nudges from changing it.">Pin</th>
+                  <th title="Primary editable probability as numerator and denominator.">Fraction</th>
+                  <th title="Equivalent value over the current least common denominator.">LCD</th>
+                  <th title="Canonical reduced fraction form of the current value.">Reduced Fraction</th>
+                  <th title="Validation state for this row while editing and recalculating.">Status</th>
                 </tr>
               </thead>
               <tbody id="wildcardBody"></tbody>

@@ -47,8 +47,10 @@
     }
 
     const paths = [
+      "metadata.appVersion", "metadata.timestamp", "metadata.copyright",
       "sets", "packs", "ui.editingSetId", "ui.editingPackId",
-      "ui.activeTab", "ui.locale", "ui.probInputMode", "ui.nudgePins",
+      "ui.activeTab", "ui.locale", "ui.probInputMode", "ui.nudgePins", "ui.fileName", "ui.reportFormat",
+      "ui.notices.privacyDismissed", "ui.notices.gdprDismissed", "ui.notices.licenseAcknowledged",
       "pack.setId", "pack.cardsPerPack", "pack.packsPerBox", "pack.boxesPerCarton", "pack.slotPlan",
       "run.packs", "run.roundingPolicy", "rules", "rarities", "packCriteria", "wildcardInputs", "validationDraft"
     ];
@@ -103,6 +105,12 @@
     syncPackLibraryFromActive(next);
     syncPackConfiguration(next);
     if (!next.ui.nudgePins || typeof next.ui.nudgePins !== "object") next.ui.nudgePins = {};
+    if (typeof next.ui.fileName !== "string") next.ui.fileName = "pack-config.json";
+    if (!["html", "txt", "json"].includes(String(next.ui.reportFormat || ""))) next.ui.reportFormat = "html";
+    if (!next.ui.notices || typeof next.ui.notices !== "object") next.ui.notices = {};
+    if (typeof next.ui.notices.privacyDismissed !== "boolean") next.ui.notices.privacyDismissed = false;
+    if (typeof next.ui.notices.gdprDismissed !== "boolean") next.ui.notices.gdprDismissed = false;
+    if (typeof next.ui.notices.licenseAcknowledged !== "boolean") next.ui.notices.licenseAcknowledged = false;
 
     paths.forEach((path) => {
       const before = read(path);

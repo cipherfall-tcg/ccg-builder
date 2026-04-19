@@ -1,43 +1,66 @@
 # CCG Builder
 
-A browser-only balancing tool for defining set rarities, configuring pack composition, calculating expected outcomes, and exporting styled reports.
+CCG Builder is a browser-only balancing tool for defining sets, composing packs, tuning wildcard distribution, calculating run outcomes, and exporting reports.
 
-## Privacy
+## Runtime Model
 
-- No data leaves the browser.
-- State is stored in localStorage only.
-- Exports are generated locally in the browser.
+- Static HTML/CSS/JS only. No server, no build step.
+- Canonical app state persists in localStorage (`rcpc.packcalc.state`).
+- Undo/redo history is retained in-memory with persisted state snapshots.
+- Calculation, validation, and rendering are coordinated by `app.js`.
 
-## Files
+## Privacy, Notices, and License Gate
 
-- `index.html`: UI shell and tab layout.
-- `styles.css`: neon visual system and report-page styling.
-- `fraction_math.js`: pure fraction/probability math helpers (`window.CCGFractionMath`).
-- `validation.js`: state validation logic (`window.CCGValidation`).
-- `calculator.js`: rounding and calculation engine (`window.CCGCalculator`).
-- `migration.js`: state migration and normalization (`window.CCGMigration`).
-- `report_payload.js`: report payload contract and policy reference data (`window.CCGReportPayload`).
-- `report_templates.js`: HTML/TXT report rendering (`window.CCGReportTemplates`).
-- `app.js`: state model, rendering, events, persistence, export orchestration — wires all modules together.
+- No app data is transmitted by the tool.
+- Privacy and local-storage notices are dismissible and restorable from Action Stack.
+- A blocking license overlay is shown until the user confirms personal use.
+- Commercial-license mailto is centralized and reused by both the overlay and footer link.
 
-## Wildcard Model
+## Code Modules
 
-- Canonical storage is integer fractions (`n/d`) per eligible rarity.
-- UI accepts fraction, decimal, or percent. On commit the user's entered text is preserved as-is; the decimal column has been removed.
-- Wildcard probabilities must sum to 1.0 (within tolerance).
-- Table columns: **Rarity | Pin | Numerator | Denominator | LCD | Reduced Fraction | Status**.
-- **Pin column**: standalone checkbox; pinned rows are highlighted with an amber tint and left-border accent across the full row.
-- **LCD column**: shows all fractions over a common denominator (LCM of all reduced denominators) for easy visual comparison. ±1 nudge buttons step by `1/LCD` and redistribute the delta proportionally among unpinned rows.
-- **Reduced Fraction column**: shows the canonical reduced form of the entered value (read-only display).
-- If a nudge cannot be redistributed safely, the nudge is kept and the row is marked pending-invalid until corrected.
+- `index.html`: app shell, tab layout, notices, and panel structure.
+- `styles.css`: neon visual system, component styling, report preview styles.
+- `fraction_math.js` (`window.CCGFractionMath`): fraction parsing/normalization/math utilities.
+- `validation.js` (`window.CCGValidation`): state validation engine.
+- `calculator.js` (`window.CCGCalculator`): run calculations and rounding policies.
+- `migration.js` (`window.CCGMigration`): schema migration and normalization.
+- `report_payload.js` (`window.CCGReportPayload`): report contract assembly.
+- `report_templates.js` (`window.CCGReportTemplates`): HTML/TXT report rendering.
+- `app.js`: orchestration, event wiring, persistence, and cross-module integration.
 
-## Export
+## Rarity Colors
 
-- TXT export is plain text.
-- HTML export is self-contained and embeds `styles.css` inline at save time.
+- Each rarity has a `colorId` from a pre-selected 16-color, theme-safe palette.
+- New rarities auto-select the most distinct available palette color in the active set.
+- Color is editable in Set Editor via dropdown.
+- Rarity color tint is applied anywhere that rarity appears (set rows, pack tiles, wildcard rows, calculator internals, etc.).
+
+## Wildcard System
+
+- Fraction-first model with canonical `n/d` storage and strict sum-to-1 behavior.
+- Wildcard table columns: **Rarity | Pin | Fraction | LCD | Reduced Fraction | Status**.
+- Fraction displays are stacked (numerator over denominator) and include percent labels.
+- Pinning protects rows from redistribution and visually highlights the full row.
+- LCD nudges and numerator/denominator nudges redistribute across eligible unpinned rows.
+- Redistribution validation accounts for both pinned and unpinned rows in total checks.
+
+## Rules Tab
+
+- Priority rules support up/down reorder controls.
+- Reorder motion is animated.
+- Group tags are shown as `Choice 1` and `Choice 2` with distinct visual highlighting.
+- Rule descriptions are expanded (up to 3 sentences) to describe impact/tradeoffs.
+
+## Files and Export Flow
+
+- Files tab is split into guided steps: filename, optional folder pinning, config IO, format select, export.
+- Files panel shows explicit pass/fail notices for local mode and full file mode.
+- Summary preview includes a direct action to jump to Files tab for export.
+- Export supports HTML, TXT, JSON.
+- HTML export is self-contained: CSS is inlined from `styles.css`.
 
 ## Development Notes
 
-- No build step required.
-- Open `index.html` in a browser.
-- Keep report structure changes in `report_templates.js` and payload changes in `report_payload.js`.
+- Open `index.html` directly in a browser.
+- Keep payload schema changes in `report_payload.js` and presentation changes in `report_templates.js`.
+- If UI behavior changes, update `requirements.md` and `DATAFLOW.md` in the same change.

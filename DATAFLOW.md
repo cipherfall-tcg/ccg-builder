@@ -6,8 +6,8 @@ flowchart TD
   B --> C[Mutate State]
   C --> D[Persist localStorage]
   C --> E[Render UI]
-  C --> F[Validate State]
-  F --> G[Run Calculation]
+  C --> F[validation.js validateState]
+  F --> G[calculator.js runCalculation]
   G --> H[Summary + Internals + Errors]
 
   C --> I[Build Report Payload]
@@ -17,6 +17,9 @@ flowchart TD
   K --> M[TXT/HTML Export]
   N[styles.css] --> M
   N --> L
+
+  O[License/Notice State] --> E
+  P[Files Workflow] --> C
 ```
 
 ## Runtime Sequence
@@ -29,12 +32,15 @@ flowchart TD
 6. Report preview refreshes from current calculation result.
 7. On export, payload is assembled in `report_payload.js`, then rendered in `report_templates.js`.
 8. HTML export embeds CSS text from `styles.css` into the saved document.
+9. License overlay gates interaction using `inert` on app content until acknowledgment.
+10. Files tab presents guided steps (filename, optional folder pin, config IO, export).
 
 ## Wildcard Subflow
 
-1. Wildcard row edit begins in numerator/denominator fields.
+1. Wildcard row edit begins in stacked fraction controls (numerator/denominator) and optional LCD nudges.
 2. Raw values are stored live and shown as pending while invalid.
-3. On blur, values normalize to reduced fraction format when valid.
-4. Nudge actions mutate numerator or denominator by exactly 1.
-5. Redistribution adjusts unpinned eligible rows to preserve sum=1 where possible.
-6. If redistribution fails, the edited row remains changed and pending-invalid until corrected.
+3. On blur, valid fraction text is preserved as entered; reduced/canonical form is shown separately.
+4. Nudge actions can target fraction num/den or LCD num/den.
+5. Redistribution adjusts unpinned eligible rows proportionally to preserve sum=1 where possible.
+6. Total-sum validation/rebalance accounts for pinned and unpinned rows.
+7. If redistribution fails, the edited row remains changed and pending-invalid until corrected.

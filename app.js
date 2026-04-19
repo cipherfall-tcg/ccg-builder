@@ -1,7 +1,8 @@
 
   /* === CONSTANTS AND DEFAULTS === */
   const APP_VERSION = "0.1.0";
-  const SCHEMA_VERSION = 1;
+  const SCHEMA_VERSION = 1.1;
+  const COPYRIGHT_LABEL = "Copyright © 2026 Chris Holt. All rights reserved. Personal use is free; commercial use requires a paid license.";
   const STORAGE_KEY = "rcpc.packcalc.state";
   const LICENSE_MAILTO = "mailto:license@cipherfall.com?subject=Commercial%20License%20Request%20%E2%80%94%20CCG%20Builder&body=Hello%2C%0A%0AI%20would%20like%20to%20obtain%20a%20commercial%20license%20for%20CCG%20Builder.%0A%0AOrganization%20name%3A%20%5Byour%20organization%5D%0ANumber%20of%20users%3A%20%5Bnumber%5D%0AEstimated%20days%20of%20use%3A%20%5Bnumber%5D%0AUse%20case%20description%3A%20%5Bdescribe%20how%20you%20intend%20to%20use%20the%20tool%5D%0A%0APlease%20reply%20with%20licensing%20terms%20and%20payment%20instructions.%0A%0AThank%20you.";
   const STORAGE_ALERT_KEY = "rcpc.packcalc.alerted";
@@ -33,6 +34,105 @@
 
   const DEFAULT_RULE_GROUP_BY_ID = Object.fromEntries(DEFAULT_RULES.map((r) => [r.id, r.group || ""]));
   const DEFAULT_RULE_ADVICE_BY_ID = Object.fromEntries(DEFAULT_RULES.map((r) => [r.id, r.advice || ""]));
+
+  // 16 pre-selected, theme-safe rarity colors.
+  const RARITY_COLOR_PALETTE = [
+    { id: "cyan",       label: "Cyan Arc",      hex: "#00e5ff", bg: "rgba(0, 229, 255, 0.16)",   border: "rgba(0, 229, 255, 0.62)" },
+    { id: "magenta",    label: "Magenta Pulse", hex: "#cc00ff", bg: "rgba(204, 0, 255, 0.18)",   border: "rgba(204, 0, 255, 0.62)" },
+    { id: "amber",      label: "Amber Flare",   hex: "#ffab00", bg: "rgba(255, 171, 0, 0.18)",   border: "rgba(255, 171, 0, 0.62)" },
+    { id: "lime",       label: "Lime Signal",   hex: "#7cff00", bg: "rgba(124, 255, 0, 0.16)",   border: "rgba(124, 255, 0, 0.58)" },
+    { id: "azure",      label: "Azure Beam",    hex: "#4da3ff", bg: "rgba(77, 163, 255, 0.18)",  border: "rgba(77, 163, 255, 0.60)" },
+    { id: "violet",     label: "Violet Rift",   hex: "#9b7dff", bg: "rgba(155, 125, 255, 0.18)", border: "rgba(155, 125, 255, 0.58)" },
+    { id: "teal",       label: "Teal Current",  hex: "#00c8b0", bg: "rgba(0, 200, 176, 0.16)",   border: "rgba(0, 200, 176, 0.56)" },
+    { id: "rose",       label: "Rose Spark",    hex: "#ff5ca8", bg: "rgba(255, 92, 168, 0.18)",  border: "rgba(255, 92, 168, 0.60)" },
+    { id: "gold",       label: "Gold Ember",    hex: "#ffd24a", bg: "rgba(255, 210, 74, 0.18)",  border: "rgba(255, 210, 74, 0.60)" },
+    { id: "ice",        label: "Ice Glow",      hex: "#7de7ff", bg: "rgba(125, 231, 255, 0.17)", border: "rgba(125, 231, 255, 0.58)" },
+    { id: "orchid",     label: "Orchid Neon",   hex: "#d786ff", bg: "rgba(215, 134, 255, 0.18)", border: "rgba(215, 134, 255, 0.58)" },
+    { id: "coral",      label: "Coral Shock",   hex: "#ff7a66", bg: "rgba(255, 122, 102, 0.18)", border: "rgba(255, 122, 102, 0.60)" },
+    { id: "mint",       label: "Mint Arc",      hex: "#5dffbe", bg: "rgba(93, 255, 190, 0.16)",  border: "rgba(93, 255, 190, 0.58)" },
+    { id: "blue",       label: "Deep Blue",     hex: "#3f6dff", bg: "rgba(63, 109, 255, 0.18)",  border: "rgba(63, 109, 255, 0.58)" },
+    { id: "pink",       label: "Hot Pink",      hex: "#ff3dd6", bg: "rgba(255, 61, 214, 0.18)",  border: "rgba(255, 61, 214, 0.60)" },
+    { id: "tangerine",  label: "Tangerine",     hex: "#ff8a2f", bg: "rgba(255, 138, 47, 0.18)",  border: "rgba(255, 138, 47, 0.60)" }
+  ];
+  const RARITY_COLOR_TOP5 = ["cyan", "magenta", "amber", "lime", "azure"];
+  const RARITY_COLOR_BY_ID = Object.fromEntries(RARITY_COLOR_PALETTE.map((c) => [c.id, c]));
+
+  function hexToRgb(hex) {
+    const m = /^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(hex || "");
+    if (!m) return null;
+    return { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) };
+  }
+
+  function colorDistanceSq(a, b) {
+    const dr = a.r - b.r;
+    const dg = a.g - b.g;
+    const db = a.b - b.b;
+    return (dr * dr) + (dg * dg) + (db * db);
+  }
+
+  function isRarityColorId(value) {
+    return typeof value === "string" && !!RARITY_COLOR_BY_ID[value];
+  }
+
+  function getRarityColorDef(colorId) {
+    return RARITY_COLOR_BY_ID[colorId] || RARITY_COLOR_BY_ID[RARITY_COLOR_TOP5[0]];
+  }
+
+  function getRarityToneStyle(colorId) {
+    const c = getRarityColorDef(colorId);
+    return `background:${c.bg};border-left:3px solid ${c.border};`;
+  }
+
+  function buildRarityColorOptions(selectedId) {
+    return RARITY_COLOR_PALETTE.map((c) => {
+      const selected = c.id === selectedId ? "selected" : "";
+      return `<option value="${c.id}" ${selected}>${escapeHtml(c.label)} (${c.hex})</option>`;
+    }).join("");
+  }
+
+  function getRarityColorSwatchStyle(colorId) {
+    const c = getRarityColorDef(colorId);
+    return `background:${c.hex};box-shadow:inset 0 0 0 1px rgba(255,255,255,0.32),0 0 0 1px ${c.border};`;
+  }
+
+  function pickMostDistinctRarityColor(existingColorIds) {
+    const usedValid = Array.from(new Set((existingColorIds || []).filter(isRarityColorId)));
+    const available = RARITY_COLOR_PALETTE.map((c) => c.id).filter((id) => !usedValid.includes(id));
+    const candidates = available.length ? available : RARITY_COLOR_PALETTE.map((c) => c.id);
+
+    if (!usedValid.length) {
+      const first = RARITY_COLOR_TOP5.find((id) => candidates.includes(id));
+      return first || candidates[0];
+    }
+
+    const usedRgb = usedValid.map((id) => hexToRgb(getRarityColorDef(id).hex)).filter(Boolean);
+    let bestId = candidates[0];
+    let bestScore = -1;
+    candidates.forEach((id) => {
+      const rgb = hexToRgb(getRarityColorDef(id).hex);
+      if (!rgb) return;
+      let minDist = Number.POSITIVE_INFINITY;
+      usedRgb.forEach((u) => {
+        const d = colorDistanceSq(rgb, u);
+        if (d < minDist) minDist = d;
+      });
+      if (minDist > bestScore) {
+        bestScore = minDist;
+        bestId = id;
+      }
+    });
+    return bestId;
+  }
+
+  function ensureRarityColorsForSet(setDef) {
+    if (!setDef || !Array.isArray(setDef.rarities)) return;
+    const used = setDef.rarities.map((r) => r.colorId).filter(isRarityColorId);
+    setDef.rarities.forEach((r) => {
+      if (isRarityColorId(r.colorId)) return;
+      r.colorId = pickMostDistinctRarityColor(used);
+      used.push(r.colorId);
+    });
+  }
 
   function generateId(prefix) {
     return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
@@ -68,7 +168,8 @@
       schemaVersion: SCHEMA_VERSION,
       metadata: {
         appVersion: APP_VERSION,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        copyright: COPYRIGHT_LABEL
       },
       sets: [initialSet],
       packs: [initialPack],
@@ -78,6 +179,13 @@
         editingPackId: initialPack.id,
         locale: "en-US",
         probInputMode: "fraction",
+        fileName: "pack-config.json",
+        reportFormat: "html",
+        notices: {
+          privacyDismissed: false,
+          gdprDismissed: false,
+          licenseAcknowledged: false
+        },
         nudgePins: {},
         migrationNoticeHtml: ""
       },
@@ -114,6 +222,26 @@
   let pinnedFolderDisplayPath = "";
   let lastExplicitFileSyncHash = null;
   let cachedExportStylesCssText = null;
+
+  function normalizeUiSettings(targetState = state) {
+    if (!targetState.ui || typeof targetState.ui !== "object") targetState.ui = {};
+    if (typeof targetState.ui.fileName !== "string") targetState.ui.fileName = "pack-config.json";
+    if (!["html", "txt", "json"].includes(String(targetState.ui.reportFormat || ""))) {
+      targetState.ui.reportFormat = "html";
+    }
+    if (!targetState.ui.notices || typeof targetState.ui.notices !== "object") {
+      targetState.ui.notices = {};
+    }
+    if (typeof targetState.ui.notices.privacyDismissed !== "boolean") {
+      targetState.ui.notices.privacyDismissed = localStorage.getItem(STORAGE_PRIVACY_BANNER_KEY) === "1";
+    }
+    if (typeof targetState.ui.notices.gdprDismissed !== "boolean") {
+      targetState.ui.notices.gdprDismissed = localStorage.getItem(STORAGE_GDPR_BANNER_KEY) === "1";
+    }
+    if (typeof targetState.ui.notices.licenseAcknowledged !== "boolean") {
+      targetState.ui.notices.licenseAcknowledged = localStorage.getItem(STORAGE_LICENSE_KEY) === "1";
+    }
+  }
 
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
@@ -166,7 +294,7 @@
     return window.confirm("You have unsaved local changes since your last explicit save/load. Open anyway and replace current state?");
   }
 
-  function pushHistory(reason) {
+  function pushHistory(reason, payload = {}) {
     syncPackLibraryFromActive(state);
     const snapshot = clone(state);
     if (historyCursor >= 0) {
@@ -175,12 +303,13 @@
       if (current === next) return;
     }
     historyStack = historyStack.slice(0, historyCursor + 1);
-    historyStack.push({ snapshot, label: historyLabel(reason) });
+    historyStack.push({ snapshot, label: historyLabel(reason, payload) });
     if (historyStack.length > HISTORY_LIMIT) {
       historyStack.shift();
     }
     historyCursor = historyStack.length - 1;
     void reason;
+    void payload;
     renderUndoRedo();
   }
 
@@ -202,44 +331,82 @@
     scheduleRecalc();
   }
 
-  function historyLabel(reason) {
+  function getRarityDisplayLabel(rarityId) {
+    const packSet = getPackSet(state);
+    const rarity = (packSet?.rarities || []).find((r) => r.id === rarityId);
+    if (!rarity) return rarityId || "rarity";
+    const code = String(rarity.shortcode || "").trim();
+    if (code) return code;
+    const name = String(rarity.name || "").trim();
+    return name || rarityId || "rarity";
+  }
+
+  function historyLabel(reason, payload = {}) {
     const labels = {
-      init: "Initialize",
-      "set-commit": "Set Edit",
-      "pack-set-change": "Set Link",
-      "pack-select": "Pack Select",
-      "pack-name-commit": "Pack Name",
-      "add-pack": "Add Pack",
-      "remove-pack": "Remove Pack",
-      "copy-pack": "Copy Pack",
-      "add-set": "Add Set",
-      "remove-set": "Remove Set",
-      "add-rarity": "Add Rarity",
-      "reset-rarities": "Reset Rarities",
-      "rarity-commit": "Rarity Edit",
-      "rarity-delete": "Delete Rarity",
-      "pack-commit": "Pack Edit",
-      "pack-slot-change": "Slot Update",
-      "pack-criteria-commit": "Criteria Edit",
-      "wildcard-eligibility": "Wildcard Toggle",
-      "wildcard-commit": "Wildcard Edit",
-      "rounding-policy": "Rounding Mode",
-      "per-card-override-mode": "Override Mode",
-      "prob-mode": "Input Mode",
-      locale: "Locale",
-      "rule-reorder": "Rule Order",
-      "snap-tolerance": "Snap Tolerance",
-      "solve-smallest": "Smallest Run",
-      "solve-box": "Box Barrier",
-      "solve-carton": "Carton Barrier",
-      "solve-snap": "Snap Barrier",
-      "nudge-per-card": "Per-Card Nudge",
-      "reset-packaging": "Reset Pack",
-      "reset-wildcards": "Reset Wildcards",
-      "reset-all": "Reset All",
-      "load-json": "Load Config"
+      init: { area: "System", action: "initialize workspace state" },
+      "set-commit": { area: "Set Editor", action: "update set details" },
+      "pack-set-change": { area: "Pack Editor", action: "change linked set" },
+      "pack-select": { area: "Pack Editor", action: "load selected pack" },
+      "pack-name-commit": { area: "Pack Editor", action: "rename active pack" },
+      "add-pack": { area: "Pack Editor", action: "add new pack" },
+      "remove-pack": { area: "Pack Editor", action: "remove active pack" },
+      "copy-pack": { area: "Pack Editor", action: "copy rules to new pack" },
+      "add-set": { area: "Set Editor", action: "add new set" },
+      "remove-set": { area: "Set Editor", action: "remove active set" },
+      "add-rarity": { area: "Set Editor", action: "add new rarity" },
+      "reset-rarities": { area: "Set Editor", action: "reset all rarities" },
+      "rarity-commit": { area: "Set Editor", action: "edit rarity fields" },
+      "rarity-delete": { area: "Set Editor", action: "remove rarity" },
+      "pack-commit": { area: "Pack Editor", action: "edit pack settings" },
+      "pack-slot-change": { area: "Pack Editor", action: "change slot assignment" },
+      "pack-criteria-commit": { area: "Pack Editor", action: "update rarity criteria" },
+      "wildcard-eligibility": { area: "Wildcard Editor", action: "toggle rarity eligibility" },
+      "wildcard-commit": { area: "Wildcard Editor", action: "update rarity ratio" },
+      "wildcard-nudge": { area: "Wildcard Editor", action: "nudge rarity likelihood" },
+      "wildcard-pin": { area: "Wildcard Editor", action: "toggle rarity pin" },
+      "rounding-policy": { area: "Calculator", action: "change rounding policy" },
+      "per-card-override-mode": { area: "Calculator", action: "toggle override mode" },
+      locale: { area: "Calculator", action: "change number locale" },
+      "rule-reorder": { area: "Rules", action: "reorder priority rule" },
+      "snap-tolerance": { area: "Wildcard Editor", action: "snap total to tolerance" },
+      "solve-smallest": { area: "Calculator", action: "set smallest run target" },
+      "solve-box": { area: "Calculator", action: "set box barrier run" },
+      "solve-carton": { area: "Calculator", action: "set carton barrier run" },
+      "solve-snap": { area: "Calculator", action: "snap run to barrier" },
+      "nudge-per-card": { area: "Wildcard Editor", action: "nudge rarity likelihood" },
+      "reset-packaging": { area: "Pack Editor", action: "reset packaging defaults" },
+      "reset-wildcards": { area: "Wildcard Editor", action: "reset all wildcard ratios" },
+      "reset-all": { area: "System", action: "reset all configuration" },
+      "load-json": { area: "Files", action: "load configuration file" }
     };
-    return labels[reason] || "State Edit";
+
+    const label = { ...(labels[reason] || { area: "System", action: "edit state" }) };
+    const rarityLabel = payload.rarityLabel || (payload.rarityId ? getRarityDisplayLabel(payload.rarityId) : "rarity");
+
+    if (reason === "rarity-delete") {
+      label.action = `remove ${rarityLabel} rarity`;
+    } else if (reason === "wildcard-eligibility") {
+      label.action = `${payload.enabled ? "enable" : "disable"} ${rarityLabel} eligibility`;
+    } else if (reason === "wildcard-commit") {
+      label.action = `set ${rarityLabel} ratio`;
+    } else if (reason === "wildcard-nudge") {
+      const direction = payload.direction > 0 ? "raise" : "lower";
+      label.action = `${direction} ${rarityLabel} likelihood`;
+    } else if (reason === "wildcard-pin") {
+      label.action = `${payload.pinned ? "pin" : "unpin"} ${rarityLabel} row`;
+    } else if (reason === "nudge-per-card") {
+      const direction = payload.direction > 0 ? "raise" : "lower";
+      label.action = `${direction} ${rarityLabel} likelihood`;
+    } else if (reason === "rule-reorder") {
+      const direction = payload.direction === "up" ? "move up" : "move down";
+      const ruleLabel = payload.ruleLabel || "priority rule";
+      label.action = `${direction} ${ruleLabel}`;
+    } else if (reason === "remove-set") {
+      const setLabel = String(payload.setLabel || "active set");
+      label.action = `remove ${setLabel}`;
+    }
+
+    return label;
   }
 
   function renderHistoryStack() {
@@ -254,7 +421,11 @@
       const classes = ["history-item"];
       if (idx === historyCursor) classes.push("active");
       if (idx > historyCursor) classes.push("redo");
-      return `<div class="${classes.join(" ")}" title="${escapeHtml(entry.label)}">${escapeHtml(entry.label)}</div>`;
+      const label = (entry.label && typeof entry.label === "object")
+        ? entry.label
+        : { area: "System", action: String(entry.label || "edit state") };
+      const title = `${label.area}: ${label.action}`;
+      return `<div class="${classes.join(" ")}" title="${escapeHtml(title)}"><div class="history-area">${escapeHtml(label.area)}</div><div class="history-action">${escapeHtml(label.action)}</div></div>`;
     }).reverse().join("");
 
     box.innerHTML = rows;
@@ -451,6 +622,7 @@
 
     const cardCount = Math.max(0, Number(targetState.pack.cardsPerPack || 0));
     const packSet = getPackSet(targetState);
+    ensureRarityColorsForSet(packSet);
     const rarities = packSet?.rarities || [];
     const rarityIds = new Set(rarities.map((r) => r.id));
 
@@ -615,6 +787,7 @@
   function renderRarityTable() {
     ensureSetSelections(state);
     const editingSet = getEditingSet(state);
+    ensureRarityColorsForSet(editingSet);
     const rarities = editingSet?.rarities || [];
     const body = byId("rarityBody");
     body.innerHTML = "";
@@ -634,9 +807,16 @@
 
     rarities.forEach((r, idx) => {
       const tr = document.createElement("tr");
+      const tone = getRarityToneStyle(r.colorId);
       tr.innerHTML = `
-        <td><input data-role="rarity-name" data-id="${r.id}" type="text" value="${escapeHtml(r.name || "")}"></td>
+        <td style="${tone}"><input data-role="rarity-name" data-id="${r.id}" type="text" value="${escapeHtml(r.name || "")}"></td>
         <td><input data-role="rarity-shortcode" data-id="${r.id}" type="text" value="${escapeHtml(r.shortcode || "")}"></td>
+        <td>
+          <div class="rarity-color-picker">
+            <span class="rarity-color-swatch" style="${getRarityColorSwatchStyle(r.colorId)}" aria-hidden="true"></span>
+            <select data-role="rarity-color" data-id="${r.id}" aria-label="Rarity color for ${escapeHtml(r.name || r.shortcode || r.id)}">${buildRarityColorOptions(r.colorId)}</select>
+          </div>
+        </td>
         <td><input data-role="rarity-setCount" data-id="${r.id}" type="number" min="1" step="1" value="${Number(r.setCount || 1)}"></td>
         <td><button data-role="rarity-delete" data-id="${r.id}" ${idx === 0 ? "" : ""}>Remove</button></td>
       `;
@@ -687,13 +867,20 @@
     state.pack.slotPlan.forEach((slot, index) => {
       const tile = document.createElement("div");
       tile.className = "slot-tile";
+      const isWildcardSlot = slot === WILDCARD_SLOT_ID;
+      const selectedRarity = rarities.find((r) => r.id === slot);
+      if (selectedRarity) {
+        tile.style.cssText = getRarityToneStyle(selectedRarity.colorId);
+      } else if (isWildcardSlot) {
+        tile.classList.add("wildcard-rainbow-tile");
+      }
       const options = ['<option value="">Select...</option>']
         .concat(rarities.map((r) => `<option value="${r.id}" ${slot === r.id ? "selected" : ""}>${escapeHtml(r.name || r.shortcode || `Rarity ${index + 1}`)}</option>`))
         .concat([`<option value="${WILDCARD_SLOT_ID}" ${slot === WILDCARD_SLOT_ID ? "selected" : ""}>Wildcard</option>`])
         .join("");
       tile.innerHTML = `
-        <strong>Card ${index + 1}</strong>
-        <select data-role="pack-slot" data-index="${index}" aria-label="Card ${index + 1} rarity selection">${options}</select>
+        <strong class="${isWildcardSlot ? "wildcard-rainbow-label" : ""}" ${selectedRarity ? `style="${getRarityToneStyle(selectedRarity.colorId)}padding:2px 6px;border-radius:4px;"` : ""}>Card ${index + 1}</strong>
+        <select class="${isWildcardSlot ? "wildcard-rainbow-control" : ""}" data-role="pack-slot" data-index="${index}" aria-label="Card ${index + 1} rarity selection">${options}</select>
       `;
       grid.appendChild(tile);
     });
@@ -703,7 +890,7 @@
       const criteria = state.packCriteria[r.id] || makeDefaultPackCriteria();
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td>${escapeHtml(r.name || r.shortcode)}</td>
+        <td style="${getRarityToneStyle(r.colorId)}">${escapeHtml(r.name || r.shortcode)}</td>
         <td class="mono">${composition.countsByRarity[r.id] || 0}</td>
         <td><input data-role="criteria-minCopies" data-id="${r.id}" type="number" min="0" step="1" value="${Number(criteria.minCopies || 0)}"></td>
         <td><input data-role="criteria-overrideMin" data-id="${r.id}" type="number" min="0" step="1" value="${Number(criteria.overrideMin || 0)}"></td>
@@ -731,7 +918,7 @@
 
     const items = rarities.map((r) => {
       const criteria = state.packCriteria[r.id] || makeDefaultPackCriteria();
-      return `<label style="display:inline-flex;align-items:center;gap:6px;margin:0 12px 8px 0;"><input data-role="wildcard-eligibility" data-id="${r.id}" type="checkbox" ${criteria.wildcardEligible ? "checked" : ""}> ${escapeHtml(r.name || r.shortcode)}</label>`;
+      return `<label style="display:inline-flex;align-items:center;gap:6px;margin:0 12px 8px 0;padding:2px 8px;border-radius:4px;${getRarityToneStyle(r.colorId)}"><input data-role="wildcard-eligibility" data-id="${r.id}" type="checkbox" ${criteria.wildcardEligible ? "checked" : ""}> ${escapeHtml(r.name || r.shortcode)}</label>`;
     }).join("");
 
     box.innerHTML = `
@@ -862,7 +1049,7 @@
       const tr = document.createElement("tr");
       if (isPinned) tr.classList.add("row-pinned");
       tr.innerHTML = `
-        <td>${escapeHtml(r.name || r.shortcode)}</td>
+        <td style="${getRarityToneStyle(r.colorId)}">${escapeHtml(r.name || r.shortcode)}</td>
         <td class="pin-col">
           <input type="checkbox" data-role="wildcard-pin" data-id="${r.id}" ${isPinned ? "checked" : ""} aria-label="Pin ${escapeHtml(r.name || r.shortcode)}">
         </td>
@@ -1001,6 +1188,8 @@
   }
 
   function renderFileTab() {
+    byId("fileNameInput").value = String(state.ui.fileName || "pack-config.json");
+    byId("reportFormat").value = String(state.ui.reportFormat || "html");
     const pathText = pinnedDirectoryHandle
       ? (pinnedFolderDisplayPath || getPinnedFolderDisplayPath(pinnedDirectoryHandle))
       : "No pinned folder";
@@ -1033,9 +1222,10 @@
 
     byId("calcStatus").value = "Calculated";
     const rows = result.totals.rows;
+    const rarityById = new Map((getPackSet(state)?.rarities || []).map((r) => [r.id, r]));
     const detailRows = rows.map((r) => `
       <tr>
-        <td>${escapeHtml(r.name)}</td>
+        <td style="${getRarityToneStyle(rarityById.get(r.rarityId)?.colorId)}">${escapeHtml(r.name)}</td>
         <td>${escapeHtml(r.shortcode)}</td>
         <td>
           <div class="per-card-cell">
@@ -1054,7 +1244,7 @@
       <div class="status ok">Detailed internals reflect current rounding policy and priority order.</div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Rarity</th><th>Code</th><th>Cards</th><th>Per Card</th><th>Yield %</th></tr></thead>
+          <thead><tr><th title="Rarity tier represented by this result row.">Rarity</th><th title="Short rarity code used in compact output.">Code</th><th title="Total cards allocated to this rarity for the current run.">Cards</th><th title="Average copies per individual card in this rarity.">Per Card</th><th title="Share of total printed cards produced by this rarity.">Yield %</th></tr></thead>
           <tbody>${detailRows}</tbody>
         </table>
       </div>
@@ -1100,6 +1290,7 @@
   }
 
   function renderAll() {
+    normalizeUiSettings(state);
     ensurePackSelections(state);
     syncPackConfiguration(state);
     renderTabs();
@@ -1116,8 +1307,6 @@
     byId("roundingPolicy").value = state.run.roundingPolicy;
     byId("perCardOverrideMode").checked = !!state.run.perCardOverrideMode;
     state.ui.probInputMode = "fraction";
-    byId("probInputMode").value = "fraction";
-    byId("probInputMode").disabled = true;
     byId("localeSelect").value = state.ui.locale;
 
     renderRarityTable();
@@ -1218,6 +1407,7 @@
     syncPackLibraryFromActive(state);
     state.metadata.timestamp = new Date().toISOString();
     state.metadata.appVersion = APP_VERSION;
+    state.metadata.copyright = COPYRIGHT_LABEL;
     state.schemaVersion = SCHEMA_VERSION;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }
@@ -1229,6 +1419,7 @@
       const parsed = JSON.parse(raw);
       const migrated = migrateConfig(parsed);
       state = migrated.state;
+      normalizeUiSettings(state);
       if (migrated.changes.length) {
         showGlobal(statusLine("warn", `Restored config with migration updates (${migrated.changes.length} fields).`));
       }
@@ -1339,7 +1530,7 @@
       showToast("error", "Report template bundle failed to load. Refresh and try again.");
       return;
     }
-    const format = byId("reportFormat").value;
+    const format = String(state.ui.reportFormat || byId("reportFormat").value || "html");
 
     if (format === "json") {
       const out = JSON.stringify(payload, null, 2);
@@ -1376,7 +1567,7 @@
   }
 
   async function saveConfigFile() {
-    const filename = byId("fileNameInput").value.trim() || "pack-config.json";
+    const filename = String(state.ui.fileName || byId("fileNameInput").value || "pack-config.json").trim() || "pack-config.json";
     const data = JSON.stringify(state, null, 2);
 
     if (utf8ByteLength(data) > MAX_JSON_BYTES) {
@@ -1523,12 +1714,14 @@
 
     byId("addRarityBtn").addEventListener("click", () => {
       const editingSet = getEditingSet(state);
+      ensureRarityColorsForSet(editingSet);
       const id = generateId("r");
       editingSet.rarities.push({
         id,
         name: "",
         shortcode: "",
-        setCount: 1
+        setCount: 1,
+        colorId: pickMostDistinctRarityColor(editingSet.rarities.map((r) => r.colorId))
       });
       state.packCriteria[id] = makeDefaultPackCriteria();
       state.wildcardInputs[id] = "0/1";
@@ -1585,16 +1778,21 @@
       scheduleRecalc();
     });
 
-    byId("probInputMode").addEventListener("change", (e) => {
-      state.ui.probInputMode = "fraction";
-      e.target.value = "fraction";
-    });
-
     byId("localeSelect").addEventListener("change", (e) => {
       state.ui.locale = e.target.value;
       pushHistory("locale");
       persistState();
       scheduleRecalc();
+    });
+
+    byId("fileNameInput").addEventListener("input", (e) => {
+      state.ui.fileName = String(e.target.value || "");
+      persistState();
+    });
+
+    byId("reportFormat").addEventListener("change", (e) => {
+      state.ui.reportFormat = String(e.target.value || "html");
+      persistState();
     });
 
     byId("wildcardBody").addEventListener("input", onWildcardTyping);
@@ -1839,7 +2037,7 @@
     state.sets.push(setDef);
     state.ui.editingSetId = setDef.id;
     ensureSetSelections(state);
-    pushHistory("add-set");
+    pushHistory("add-set", { setLabel: setDef.name || "new set" });
     persistState();
     renderAll();
   }
@@ -1848,6 +2046,7 @@
     syncPackLibraryFromActive(state);
     if (state.sets.length <= 1) return;
     const editingSet = getEditingSet(state);
+    const removedSetLabel = String(editingSet?.name || "active set").trim() || "active set";
     const removedSetId = editingSet.id;
     editingSet.rarities.forEach((r) => {
       delete state.packCriteria[r.id];
@@ -1864,7 +2063,7 @@
     state.pack.slotPlan = state.pack.slotPlan.map((slot) => (getPackSet(state)?.rarities || []).some((r) => r.id === slot) || slot === WILDCARD_SLOT_ID ? slot : "");
     syncPackConfiguration(state);
     syncPackLibraryFromActive(state);
-    pushHistory("remove-set");
+    pushHistory("remove-set", { setLabel: removedSetLabel });
     persistState();
     renderAll();
     scheduleRecalc();
@@ -1881,10 +2080,12 @@
     if (role === "rarity-name") rarity.name = e.target.value;
     if (role === "rarity-shortcode") rarity.shortcode = e.target.value;
     if (role === "rarity-setCount") rarity.setCount = Number(e.target.value || 0);
+    if (role === "rarity-color" && isRarityColorId(e.target.value)) rarity.colorId = e.target.value;
 
     syncPackConfiguration(state);
   sortPackSlotPlan(state);
     persistState();
+    renderRarityTable();
     renderPackBuilder();
     renderWildcardTable();
     scheduleRecalc();
@@ -1914,13 +2115,15 @@
     if (role !== "rarity-delete") return;
     const id = e.target.dataset.id;
     const editingSet = getEditingSet(state);
+    const rarityToRemove = editingSet.rarities.find((r) => r.id === id);
+    const rarityLabel = String(rarityToRemove?.shortcode || rarityToRemove?.name || id || "rarity").trim() || "rarity";
     editingSet.rarities = editingSet.rarities.filter((r) => r.id !== id);
     delete state.packCriteria[id];
     delete state.wildcardInputs[id];
     state.pack.slotPlan = state.pack.slotPlan.map((slot) => (slot === id ? "" : slot));
     syncPackConfiguration(state);
     sortPackSlotPlan(state);
-    pushHistory("rarity-delete");
+    pushHistory("rarity-delete", { rarityLabel });
     persistState();
     renderAll();
     scheduleRecalc();
@@ -1986,7 +2189,7 @@
       state.validationDraft.wildcardPendingInvalid[id] = false;
     }
 
-    pushHistory("wildcard-eligibility");
+    pushHistory("wildcard-eligibility", { rarityId: id, enabled: !!e.target.checked });
     persistState();
     renderWildcardTable();
     scheduleRecalc();
@@ -2146,7 +2349,7 @@
     // Leave the user's entered fraction as-is; just clear pending flags.
     state.validationDraft.wildcardDirty[id] = false;
     state.validationDraft.wildcardPendingInvalid[id] = false;
-    pushHistory("wildcard-commit");
+    pushHistory("wildcard-commit", { rarityId: id });
     persistState();
     renderWildcardTable();
     scheduleRecalc();
@@ -2223,7 +2426,7 @@
       showToast("error", redistribute.message);
     }
 
-    pushHistory("wildcard-nudge");
+    pushHistory("wildcard-nudge", { rarityId: id, direction: dir, field });
     persistState();
     renderWildcardTable();
     scheduleRecalc();
@@ -2239,7 +2442,7 @@
       state.ui.nudgePins = {};
     }
     state.ui.nudgePins[id] = !!e.target.checked;
-    pushHistory("wildcard-pin");
+    pushHistory("wildcard-pin", { rarityId: id, pinned: !!e.target.checked });
     persistState();
     renderWildcardTable();
   }
@@ -2253,6 +2456,7 @@
     if (idx < 0) return;
 
     const previousTops = captureRuleRowTops();
+    const movedRuleLabel = String(state.rules[idx]?.label || "priority rule");
     let moved = false;
 
     if (role === "rule-up" && idx > 0) {
@@ -2270,7 +2474,7 @@
 
     if (!moved) return;
 
-    pushHistory("rule-reorder");
+    pushHistory("rule-reorder", { direction: role === "rule-up" ? "up" : "down", ruleLabel: movedRuleLabel });
     persistState();
     renderRules();
     animateRuleReorder(previousTops);
@@ -2477,7 +2681,7 @@
       state.validationDraft.wildcardDirty[id] = false;
     });
 
-    pushHistory("nudge-per-card");
+    pushHistory("nudge-per-card", { rarityId, direction });
     persistState();
     renderAll();
     scheduleRecalc();
@@ -2568,7 +2772,7 @@
     const overlay  = byId("licenseOverlay");
     const header   = byId("appHeader");
     const main     = byId("appMain");
-    const accepted = localStorage.getItem(STORAGE_LICENSE_KEY) === "1";
+    const accepted = !!state.ui.notices?.licenseAcknowledged || localStorage.getItem(STORAGE_LICENSE_KEY) === "1";
     if (accepted) {
       overlay.hidden = true;
       header.removeAttribute("inert");
@@ -2593,7 +2797,10 @@
     if (footerLink) footerLink.href = LICENSE_MAILTO;
 
     personalBtn.addEventListener("click", () => {
+      if (!state.ui.notices || typeof state.ui.notices !== "object") state.ui.notices = {};
+      state.ui.notices.licenseAcknowledged = true;
       localStorage.setItem(STORAGE_LICENSE_KEY, "1");
+      persistState();
       applyLicenseGate();
     });
 
@@ -2604,7 +2811,7 @@
   function applyGdprNoticeVisibility() {
     const banner = byId("gdprNoticeBanner");
     if (!banner) return;
-    const dismissed = localStorage.getItem(STORAGE_GDPR_BANNER_KEY) === "1";
+    const dismissed = !!state.ui.notices?.gdprDismissed || localStorage.getItem(STORAGE_GDPR_BANNER_KEY) === "1";
     banner.hidden = dismissed;
   }
 
@@ -2614,14 +2821,17 @@
     if (!banner || !btn) return;
     btn.addEventListener("click", () => {
       banner.hidden = true;
+      if (!state.ui.notices || typeof state.ui.notices !== "object") state.ui.notices = {};
+      state.ui.notices.gdprDismissed = true;
       localStorage.setItem(STORAGE_GDPR_BANNER_KEY, "1");
+      persistState();
     });
   }
 
   function applyPrivacyNoticeVisibility() {
     const banner = byId("privacyNoticeBanner");
     if (!banner) return;
-    const dismissed = localStorage.getItem(STORAGE_PRIVACY_BANNER_KEY) === "1";
+    const dismissed = !!state.ui.notices?.privacyDismissed || localStorage.getItem(STORAGE_PRIVACY_BANNER_KEY) === "1";
     banner.hidden = dismissed;
   }
 
@@ -2631,7 +2841,10 @@
     if (!banner || !btn) return;
     btn.addEventListener("click", () => {
       banner.hidden = true;
+      if (!state.ui.notices || typeof state.ui.notices !== "object") state.ui.notices = {};
+      state.ui.notices.privacyDismissed = true;
       localStorage.setItem(STORAGE_PRIVACY_BANNER_KEY, "1");
+      persistState();
     });
   }
 
@@ -2648,6 +2861,10 @@
     applyGdprNoticeVisibility();
 
     byId("showBannersBtn").addEventListener("click", () => {
+      if (!state.ui.notices || typeof state.ui.notices !== "object") state.ui.notices = {};
+      state.ui.notices.privacyDismissed = false;
+      state.ui.notices.gdprDismissed = false;
+      state.ui.notices.licenseAcknowledged = false;
       const banners = [
         { el: byId("privacyNoticeBanner"), key: STORAGE_PRIVACY_BANNER_KEY },
         { el: byId("gdprNoticeBanner"),    key: STORAGE_GDPR_BANNER_KEY },
@@ -2658,6 +2875,7 @@
         el.hidden = false;
         localStorage.removeItem(key);
       });
+      persistState();
         // Re-apply the license gate so inert is restored on header/main
         applyLicenseGate();
     });
