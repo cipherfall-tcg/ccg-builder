@@ -1897,6 +1897,31 @@
       persistState();
     });
 
+    byId("copyJsonBtn").addEventListener("click", async () => {
+      const text = byId("configJson").value;
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        const btn = byId("copyJsonBtn");
+        btn.classList.add("icon-btn--ok");
+        setTimeout(() => btn.classList.remove("icon-btn--ok"), 1500);
+      } catch (_e) {
+        alert("Clipboard write failed. Please copy the text manually.");
+      }
+    });
+
+    byId("pasteJsonBtn").addEventListener("click", async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        byId("configJson").value = text;
+        const btn = byId("pasteJsonBtn");
+        btn.classList.add("icon-btn--ok");
+        setTimeout(() => btn.classList.remove("icon-btn--ok"), 1500);
+      } catch (_e) {
+        alert("Clipboard read failed. Please paste the text manually.");
+      }
+    });
+
     byId("pickFolderBtn").addEventListener("click", async () => {
       try {
         await pickFolder();
