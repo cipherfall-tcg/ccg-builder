@@ -5,6 +5,7 @@
   const STORAGE_KEY = "rcpc.packcalc.state";
   const STORAGE_ALERT_KEY = "rcpc.packcalc.alerted";
   const STORAGE_PINNED_DIR_KEY = "rcpc.packcalc.pinnedDirSupported";
+  const STORAGE_PRIVACY_BANNER_KEY = "rcpc.packcalc.privacyNoticeDismissed";
   const TOLERANCE = 1e-9;
   const FRACTION_DENOM_CAP = 9999;
   const MAX_JSON_BYTES = 5 * 1024 * 1024;
@@ -105,6 +106,7 @@
   let pinnedDirectoryHandle = null;
   let pinnedFolderDisplayPath = "";
   let lastExplicitFileSyncHash = null;
+  let cachedExportStylesCssText = null;
 
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
@@ -1511,348 +1513,70 @@
     return cur;
   }
 
-  function inferRarityTier(rarity) {
-    const raw = `${rarity?.name || ""} ${rarity?.shortcode || ""}`.toLowerCase();
-    if (raw.includes("legend")) return "legendary";
-    if (raw.includes("elite")) return "elite";
-    if (raw.includes("rare")) return "rare";
-    if (raw.includes("uncommon") || raw.includes("unc")) return "uncommon";
-    if (raw.includes("common") || raw.includes("com")) return "common";
-    return "other";
-  }
-
-  function getSetPolicyChecks(packSet) {
-    const rarities = packSet?.rarities || [];
-    const tierCounts = { common: 0, uncommon: 0, rare: 0, elite: 0, legendary: 0, other: 0 };
-
-    rarities.forEach((r) => {
-      const tier = inferRarityTier(r);
-      tierCounts[tier] += Number(r.setCount || 0);
-    });
-
-    const eliteOk = tierCounts.elite >= 2;
-    const legendaryOk = tierCounts.legendary >= 1;
-    const checks = [
-      { label: "Set contains at least 2 Elite cards", ok: eliteOk, detail: `Detected Elite cards: ${tierCounts.elite}` },
-      { label: "Set contains at least 1 Legendary card", ok: legendaryOk, detail: `Detected Legendary cards: ${tierCounts.legendary}` }
-    ];
-
-    return { tierCounts, checks };
-  }
-
-  function getPolicyReferenceData() {
-    return {
-      dimensions: {
-        pack: { size: "2.6 x 3.6 x 0.12 in", weight: "12-14 g" },
-        box: { size: "7.5 x 5.0 x 2.75 in", weight: "1.0-1.2 lb" },
-        carton: { size: "18 x 14 x 12 in", weight: "6-7 lb" }
-      },
-      costEstimate: {
-        perPack: "$0.35-$0.55",
-        perBox: "$13-$20",
-        perCarton: "$80-$120",
-        perCard: "$0.04-$0.06"
-      },
-      msrpReference: {
-        pack: "$3.00",
-        box: "$105.00",
-        carton: "$620.00"
-      }
-    };
-  }
-
   /* === REPORTING AND EXPORT === */
-  function buildReportPayload(result) {
-    const activePack = getPackRecordById(state, state.ui.editingPackId);
-    const packSet = getPackSet(state);
-    const packRarities = packSet?.rarities || [];
-    const rarityById = Object.fromEntries(packRarities.map((r) => [r.id, r]));
-    const rarityMap = Object.fromEntries(packRarities.map((r) => [r.id, r]));
-    const composition = getPackComposition(state);
-    const wildcardRows = packRarities
-      .filter((r) => state.packCriteria[r.id]?.wildcardEligible)
-      .map((r) => {
-        const raw = state.wildcardInputs[r.id] || "0";
-        const parsed = parseProbabilityInput(raw, state.ui.probInputMode);
-        const value = parsed.ok ? parsed.value : 0;
-        const frac = toFractionApprox(value, FRACTION_DENOM_CAP);
-        return {
-          rarity: r.name,
-          shortcode: r.shortcode,
-          input: raw,
-          decimal: value,
-          fraction: `${frac.n}/${frac.d}`,
-          approx: frac.approx
-        };
-      });
-
-    const fixedCountsByRarity = Object.entries(composition.countsByRarity || {}).map(([rarityId, count]) => {
-      const rarity = rarityById[rarityId] || {};
-      return {
-        rarity: String(rarity.name || "").trim() || "Unnamed Rarity",
-        shortcode: String(rarity.shortcode || "").trim() || "",
-        count: Number(count || 0)
-      };
-    });
-
-    const criteriaByRarity = packRarities.map((r) => {
-      const criteria = state.packCriteria[r.id] || makeDefaultPackCriteria();
-      return {
-        rarity: String(r.name || "").trim() || "Unnamed Rarity",
-        shortcode: String(r.shortcode || "").trim() || "",
-        wildcardEligible: !!criteria.wildcardEligible,
-        minCopies: Number(criteria.minCopies || 0),
-        overrideMin: Number(criteria.overrideMin || 0)
-      };
-    });
-
-    return {
-      metadata: {
-        timestamp: new Date().toISOString(),
-        appVersion: APP_VERSION,
-        schemaVersion: SCHEMA_VERSION
-      },
-      report: {
-        pack: {
-          id: activePack?.id || "",
-          name: activePack?.name || ""
-        },
-        set: {
-          id: packSet?.id || "",
-          name: packSet?.name || "",
-          totalCards: packSet?.totalCards || 0,
-          rarityTotal: packRarities.reduce((sum, r) => sum + Number(r.setCount || 0), 0)
-        },
-        rarityTable: result.ok ? result.totals.rows : [],
-        perCardCounts: result.ok && state.run.perCardOverrideMode ? result.totals.rows.map((r) => ({ shortcode: r.shortcode, perCard: r.perCard })) : [],
-        wildcardRules: wildcardRows,
-        packRules: {
-          cardsPerPack: state.pack.cardsPerPack,
-          slotPlan: state.pack.slotPlan.map((slot) => {
-            if (slot === WILDCARD_SLOT_ID) return "Wildcard";
-            if (!slot) return "Unassigned";
-            const rarity = rarityMap[slot];
-            if (!rarity) return "Unassigned";
-            const name = String(rarity.name || "").trim();
-            const code = String(rarity.shortcode || "").trim();
-            return name && code ? `${name} (${code})` : (name || code || "Unassigned");
-          }),
-          slotPlanLabels: state.pack.slotPlan.map((slot) => {
-            if (slot === WILDCARD_SLOT_ID) return "Wildcard";
-            if (!slot) return "Unassigned";
-            const rarity = rarityMap[slot];
-            return rarity ? (rarity.shortcode || rarity.name) : "Unassigned";
-          }),
-          wildcardSlots: composition.wildcardSlots,
-          fixedCountsByRarity,
-          criteriaByRarity
-        },
-        packaging: {
-          packsPerBox: state.pack.packsPerBox,
-          boxesPerCarton: state.pack.boxesPerCarton,
-          packsPerCarton: state.pack.packsPerBox * state.pack.boxesPerCarton,
-          cardsPerBox: state.pack.cardsPerPack * state.pack.packsPerBox,
-          cardsPerCarton: state.pack.cardsPerPack * state.pack.packsPerBox * state.pack.boxesPerCarton
-        },
-        policy: {
-          setChecks: getSetPolicyChecks(packSet),
-          reference: getPolicyReferenceData()
-        },
-        totals: result.ok ? {
-          totalCards: result.totals.totalCards,
-          totalPacks: result.totals.totalPacks
-        } : null,
-        priorities: state.rules.map((r, i) => ({ rank: i + 1, id: r.id, label: r.label }))
-      }
-    };
+  function getReportPayloadBuilder() {
+    return window.CCGReportPayload || null;
   }
 
-  function buildHtmlReport(payload) {
-    const setChecks = payload.report.policy.setChecks;
-    const ref = payload.report.policy.reference;
+  function buildReportPayload(result) {
+    const builder = getReportPayloadBuilder();
+    if (!builder || typeof builder.buildReportPayload !== "function") {
+      return null;
+    }
 
-    const rarityRows = payload.report.rarityTable.map((row) => `
-      <tr>
-        <td>${escapeHtml(row.name)}</td>
-        <td>${escapeHtml(row.shortcode)}</td>
-        <td>${escapeHtml(String(row.cards))}</td>
-        <td>${escapeHtml(Number(row.perCard).toFixed(4))}</td>
-        <td>${escapeHtml(Number(row.percent).toFixed(4))}%</td>
-      </tr>
-    `).join("");
+    return builder.buildReportPayload({
+      state,
+      result,
+      appVersion: APP_VERSION,
+      schemaVersion: SCHEMA_VERSION,
+      constants: {
+        FRACTION_DENOM_CAP,
+        WILDCARD_SLOT_ID
+      },
+      helpers: {
+        getPackRecordById,
+        getPackSet,
+        getPackComposition,
+        parseProbabilityInput,
+        toFractionApprox,
+        makeDefaultPackCriteria
+      }
+    });
+  }
 
-    const wildcardRows = payload.report.wildcardRules.map((row) => `
-      <tr>
-        <td>${escapeHtml(row.rarity)}</td>
-        <td>${escapeHtml(row.shortcode)}</td>
-        <td>${escapeHtml(row.input)}</td>
-        <td>${escapeHtml(Number(row.decimal).toFixed(9))}</td>
-        <td>${escapeHtml(row.fraction)}${row.approx ? " (approx)" : ""}</td>
-      </tr>
-    `).join("");
+  function getReportTemplates() {
+    return window.CCGReportTemplates || null;
+  }
 
-    const packRecipeRows = (payload.report.packRules.fixedCountsByRarity || []).map((row) => {
-      const label = row.shortcode
-        ? `${row.rarity} (${row.shortcode})`
-        : row.rarity;
-      return `
-      <tr>
-        <td>${escapeHtml(label)}</td>
-        <td>${escapeHtml(String(row.count))}</td>
-      </tr>
-    `;
-    }).join("");
+  async function getStylesCssForExport() {
+    if (cachedExportStylesCssText) {
+      return cachedExportStylesCssText;
+    }
 
-    const setCheckRows = (setChecks.checks || []).map((check) => `
-      <tr>
-        <td>${escapeHtml(check.label)}</td>
-        <td>${check.ok ? "PASS" : "REVIEW"}</td>
-        <td>${escapeHtml(check.detail)}</td>
-      </tr>
-    `).join("");
+    try {
+      const response = await fetch("./styles.css", { cache: "no-store" });
+      if (!response.ok) throw new Error(`styles.css fetch failed (${response.status})`);
+      const css = await response.text();
+      if (!css.trim()) throw new Error("styles.css is empty");
+      cachedExportStylesCssText = css;
+      return css;
+    } catch (_fetchError) {
+      const linkNodes = Array.from(document.querySelectorAll('link[rel="stylesheet"]'));
+      const stylesLink = linkNodes.find((node) => String(node.getAttribute("href") || "").includes("styles.css"));
+      if (stylesLink && stylesLink.sheet) {
+        try {
+          const cssRules = Array.from(stylesLink.sheet.cssRules || []).map((rule) => rule.cssText).join("\n");
+          if (cssRules.trim()) {
+            cachedExportStylesCssText = cssRules;
+            return cssRules;
+          }
+        } catch (_sheetError) {
+          // Fall through to explicit error below if stylesheet rules are inaccessible.
+        }
+      }
+    }
 
-    const priorityRows = payload.report.priorities.map((row) => `<li>${row.rank}. ${escapeHtml(row.label)}</li>`).join("");
-
-    return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CCG Builder Report</title>
-  <style>
-    body { font-family: system-ui, -apple-system, sans-serif; margin: 28px; color: #1f1b16; background: #faf7f1; line-height: 1.45; }
-    h1, h2, h3 { margin: 0 0 12px; }
-    h1 { font-size: 1.85rem; }
-    h2 { font-size: 1.2rem; }
-    h3 { font-size: 1rem; color: #6d230e; }
-    section { margin: 0 0 18px; padding: 14px 16px; background: #fffdf8; border: 1px solid #d8cab5; border-radius: 12px; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { border-bottom: 1px solid #eadfce; padding: 8px; text-align: left; }
-    th { background: #fdf3e5; }
-    .pass { color: #145328; font-weight: 700; }
-    .review { color: #7c4800; font-weight: 700; }
-    .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
-    .k { font-size: 0.8rem; color: #564b3f; text-transform: uppercase; letter-spacing: 0.04em; }
-    .v { font-size: 1rem; font-weight: 700; }
-    .subgrid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-    .note { color: #564b3f; font-size: 0.92rem; }
-  </style>
-</head>
-<body>
-  <h1>CCG Builder Report</h1>
-  <section>
-    <div class="meta">
-      <div><div class="k">Pack</div><div class="v">${escapeHtml(payload.report.pack.name || "Untitled Pack")}</div></div>
-      <div><div class="k">Set</div><div class="v">${escapeHtml(payload.report.set.name)}</div></div>
-      <div><div class="k">Set Card Count</div><div class="v">${escapeHtml(String(payload.report.set.totalCards))}</div></div>
-      <div><div class="k">Run Size</div><div class="v">${escapeHtml(String(payload.report.totals.totalPacks))} packs</div></div>
-      <div><div class="k">Total Printed Cards</div><div class="v">${escapeHtml(String(payload.report.totals.totalCards))}</div></div>
-      <div><div class="k">Cards per Pack</div><div class="v">${escapeHtml(String(payload.report.packRules.cardsPerPack))}</div></div>
-      <div><div class="k">Packs per Box</div><div class="v">${escapeHtml(String(payload.report.packaging.packsPerBox))}</div></div>
-      <div><div class="k">Boxes per Carton</div><div class="v">${escapeHtml(String(payload.report.packaging.boxesPerCarton))}</div></div>
-      <div><div class="k">Generated</div><div class="v">${escapeHtml(payload.metadata.timestamp)}</div></div>
-      <div><div class="k">App Version</div><div class="v">${escapeHtml(payload.metadata.appVersion)}</div></div>
-    </div>
-  </section>
-
-  <section>
-    <h2>Booster Pack and Packaging Structure</h2>
-    <div class="subgrid">
-      <div>
-        <h3>Pack Recipe Snapshot</h3>
-        <table>
-          <thead><tr><th>Rarity</th><th>Fixed Slots per Pack</th></tr></thead>
-          <tbody>${packRecipeRows || '<tr><td colspan="2">No fixed rarity slots configured.</td></tr>'}</tbody>
-        </table>
-        <p class="note">Wildcard slots per pack: ${escapeHtml(String(payload.report.packRules.wildcardSlots))}</p>
-      </div>
-      <div>
-        <h3>Packaging Hierarchy</h3>
-        <table>
-          <tbody>
-            <tr><th>Cards per Pack</th><td>${escapeHtml(String(payload.report.packRules.cardsPerPack))}</td></tr>
-            <tr><th>Packs per Box</th><td>${escapeHtml(String(payload.report.packaging.packsPerBox))}</td></tr>
-            <tr><th>Boxes per Carton</th><td>${escapeHtml(String(payload.report.packaging.boxesPerCarton))}</td></tr>
-            <tr><th>Packs per Carton</th><td>${escapeHtml(String(payload.report.packaging.packsPerCarton))}</td></tr>
-            <tr><th>Cards per Box</th><td>${escapeHtml(String(payload.report.packaging.cardsPerBox))}</td></tr>
-            <tr><th>Cards per Carton</th><td>${escapeHtml(String(payload.report.packaging.cardsPerCarton))}</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <h2>Rarity Totals</h2>
-    <table>
-      <thead><tr><th>Rarity</th><th>Code</th><th>Cards</th><th>Per Card</th><th>Yield %</th></tr></thead>
-      <tbody>${rarityRows}</tbody>
-    </table>
-  </section>
-  <section>
-    <h2>Wildcard Rules</h2>
-    <table>
-      <thead><tr><th>Rarity</th><th>Code</th><th>Input</th><th>Decimal</th><th>Fraction</th></tr></thead>
-      <tbody>${wildcardRows || '<tr><td colspan="5">No wildcard rules configured.</td></tr>'}</tbody>
-    </table>
-  </section>
-  <section>
-    <h2>Pack Definition and Wildcard Distribution</h2>
-    <p><strong>Cards per pack:</strong> ${escapeHtml(String(payload.report.packRules.cardsPerPack))}</p>
-    <p><strong>Slot plan:</strong> ${escapeHtml(payload.report.packRules.slotPlanLabels.join(", "))}</p>
-    <p><strong>Wildcard slots:</strong> ${escapeHtml(String(payload.report.packRules.wildcardSlots))}</p>
-    <p><strong>Packs per box:</strong> ${escapeHtml(String(payload.report.packaging.packsPerBox))}</p>
-    <p><strong>Boxes per carton:</strong> ${escapeHtml(String(payload.report.packaging.boxesPerCarton))}</p>
-    <p><strong>Packs per carton:</strong> ${escapeHtml(String(payload.report.packaging.packsPerCarton))}</p>
-  </section>
-
-  <section>
-    <h2>Set Policy Checks</h2>
-    <table>
-      <thead><tr><th>Rule</th><th>Status</th><th>Detail</th></tr></thead>
-      <tbody>${setCheckRows}</tbody>
-    </table>
-    <p class="note">Checks are evaluated against current set rarity data and policy baseline targets for Elite and Legendary minimums.</p>
-  </section>
-
-  <section>
-    <h2>Policy Reference Snapshot</h2>
-    <div class="subgrid">
-      <div>
-        <h3>Physical Specs (Reference)</h3>
-        <table>
-          <thead><tr><th>Unit</th><th>Approx. Size</th><th>Approx. Weight</th></tr></thead>
-          <tbody>
-            <tr><td>Booster Pack</td><td>${escapeHtml(ref.dimensions.pack.size)}</td><td>${escapeHtml(ref.dimensions.pack.weight)}</td></tr>
-            <tr><td>Booster Box</td><td>${escapeHtml(ref.dimensions.box.size)}</td><td>${escapeHtml(ref.dimensions.box.weight)}</td></tr>
-            <tr><td>Master Carton</td><td>${escapeHtml(ref.dimensions.carton.size)}</td><td>${escapeHtml(ref.dimensions.carton.weight)}</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div>
-        <h3>Cost and MSRP References</h3>
-        <table>
-          <tbody>
-            <tr><th>Estimated Cost per Pack</th><td>${escapeHtml(ref.costEstimate.perPack)}</td></tr>
-            <tr><th>Estimated Cost per Box</th><td>${escapeHtml(ref.costEstimate.perBox)}</td></tr>
-            <tr><th>Estimated Cost per Carton</th><td>${escapeHtml(ref.costEstimate.perCarton)}</td></tr>
-            <tr><th>Estimated Cost per Card</th><td>${escapeHtml(ref.costEstimate.perCard)}</td></tr>
-            <tr><th>MSRP per Pack</th><td>${escapeHtml(ref.msrpReference.pack)}</td></tr>
-            <tr><th>MSRP per Box</th><td>${escapeHtml(ref.msrpReference.box)}</td></tr>
-            <tr><th>MSRP per Carton</th><td>${escapeHtml(ref.msrpReference.carton)}</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-    <p class="note">Reference values above mirror policy guidance and should be reviewed against current vendor quotes and release strategy.</p>
-  </section>
-
-  <section>
-    <h2>Priority Rules</h2>
-    <ol>${priorityRows}</ol>
-  </section>
-</body>
-</html>`;
+    throw new Error("Unable to load styles.css for inline export");
   }
 
   function downloadBlob(filename, type, data) {
@@ -1875,6 +1599,15 @@
       return;
     }
     const payload = buildReportPayload(result);
+    if (!payload) {
+      showToast("error", "Report payload bundle failed to load. Refresh and try again.");
+      return;
+    }
+    const templates = getReportTemplates();
+    if (!templates || typeof templates.buildHtmlReport !== "function" || typeof templates.buildTextReport !== "function") {
+      showToast("error", "Report template bundle failed to load. Refresh and try again.");
+      return;
+    }
     const format = byId("reportFormat").value;
 
     if (format === "json") {
@@ -1884,21 +1617,20 @@
     }
 
     if (format === "txt") {
-      const lines = [];
-      lines.push("CCG Builder Report");
-      lines.push(`Set: ${payload.report.set.name}`);
-      lines.push(`Set total cards: ${payload.report.set.totalCards}`);
-      lines.push(`Generated: ${payload.metadata.timestamp}`);
-      lines.push(`App: ${payload.metadata.appVersion}`);
-      lines.push("");
-      payload.report.rarityTable.forEach((r) => {
-        lines.push(`${r.name} (${r.shortcode}) cards=${r.cards} perCard=${r.perCard.toFixed(4)} yield=${r.percent.toFixed(4)}%`);
-      });
-      downloadBlob("pack-report.txt", "text/plain", lines.join("\n"));
+      const out = templates.buildTextReport(payload);
+      downloadBlob("pack-report.txt", "text/plain", out);
       return;
     }
 
-    const html = buildHtmlReport(payload);
+    let inlineCssText = "";
+    try {
+      inlineCssText = await getStylesCssForExport();
+    } catch (_cssError) {
+      showToast("error", "Could not embed styles.css into report export. Refresh and try again.");
+      return;
+    }
+
+    const html = templates.buildHtmlReport(payload, escapeHtml, { inlineCssText });
     downloadBlob("pack-report.html", "text/html", html);
   }
 
@@ -2876,11 +2608,30 @@
     localStorage.setItem(STORAGE_PINNED_DIR_KEY, String(!!window.showDirectoryPicker));
   }
 
+  function applyPrivacyNoticeVisibility() {
+    const banner = byId("privacyNoticeBanner");
+    if (!banner) return;
+    const dismissed = localStorage.getItem(STORAGE_PRIVACY_BANNER_KEY) === "1";
+    banner.hidden = dismissed;
+  }
+
+  function bindPrivacyNoticeDismiss() {
+    const banner = byId("privacyNoticeBanner");
+    const btn = byId("dismissPrivacyNoticeBtn");
+    if (!banner || !btn) return;
+    btn.addEventListener("click", () => {
+      banner.hidden = true;
+      localStorage.setItem(STORAGE_PRIVACY_BANNER_KEY, "1");
+    });
+  }
+
   /* === INITIALIZATION === */
   function initialize() {
     loadPersistedState();
     renderAll();
     bindEvents();
+    bindPrivacyNoticeDismiss();
+    applyPrivacyNoticeVisibility();
     checkFeaturesOnce();
     pushHistory("init");
     scheduleRecalc();

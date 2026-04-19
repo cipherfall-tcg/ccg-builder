@@ -32,6 +32,10 @@
   <header>
     <h1>CCG Builder</h1>
     <p class="lead">Blank-start configurable calculator with deterministic math, validation guidance, and exportable reports.</p>
+    <div id="privacyNoticeBanner" class="status ok privacy-banner" role="note" aria-label="Privacy notice">
+      <span>Privacy notice: This tool runs entirely in your browser. Your config data, set data, and calculations are never sent to any server.</span>
+      <button id="dismissPrivacyNoticeBtn" class="banner-dismiss" type="button" aria-label="Dismiss privacy notice">Dismiss</button>
+    </div>
     <div id="globalAlert" aria-live="polite"></div>
   </header>
 
@@ -80,6 +84,13 @@
           <li>Config Manager tab: Generate JSON from the current app state or load pasted JSON with migration support.</li>
           <li>Files tab: Save config to disk, open config from disk, and keep data portable between sessions.</li>
           <li>Autosave: The app also keeps current state in browser storage for quick resume.</li>
+        </ul>
+
+        <h3>Privacy and Data Handling</h3>
+        <ul>
+          <li>No data leaves your browser unless you explicitly export a file or copy/paste content yourself.</li>
+          <li>There are no background uploads, telemetry calls, or server-side processing for your set or pack data.</li>
+          <li>Browser autosave stays local to this browser profile and device.</li>
         </ul>
 
         <h3>File Access</h3>
@@ -349,6 +360,7 @@
       <div class="card">
         <h2>Config Manager</h2>
         <p class="hint">Export/import full state with schema migration support and field-by-field migration notices.</p>
+        <p class="status ok" role="note">Local-only processing: JSON in this panel is handled entirely in-browser and is never transmitted by the app.</p>
         <textarea id="configJson" aria-label="Configuration JSON"></textarea>
         <div class="actions">
           <button id="generateJsonBtn" class="secondary">Generate JSON</button>
@@ -362,6 +374,7 @@
     <section id="filesTab" class="tab-panel" role="tabpanel" aria-labelledby="tabFiles">
       <div class="card">
         <h2>File Operations</h2>
+        <p class="status ok" role="note">Data stays local: File read/write actions use your browser and selected local files/folders only.</p>
         <div id="fileModeNotice"></div>
 
         <div class="row">
@@ -407,6 +420,8 @@
     </div>
   </main>
 
+  <script src="./report_payload.js"></script>
+  <script src="./report_templates.js"></script>
   <script src="./app.js"></script>
 
   <footer>
