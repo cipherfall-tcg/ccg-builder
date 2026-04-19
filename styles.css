@@ -688,6 +688,19 @@ body.report-page::before {
   border-radius: 3px;
 }
 
+.fraction-control {
+  display: grid;
+  grid-template-columns: 28px minmax(74px, 1fr) 28px;
+  align-items: center;
+  gap: 6px;
+}
+
+.fraction-control input {
+  min-width: 0;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 .per-card-cell {
   display: grid;
   grid-template-columns: 92px 30px 30px auto;

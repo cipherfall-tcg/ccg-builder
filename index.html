@@ -249,10 +249,9 @@
           <p class="hint">Enable wildcard-eligible rarities here. Only enabled rarities get probability line items below.</p>
           <div class="row">
             <div class="field sm-4">
-              <label for="probInputMode">Probability input mode</label>
+              <label for="probInputMode">Wildcard input format</label>
               <select id="probInputMode">
-                <option value="decimal">Decimal</option>
-                <option value="fraction">Fraction a/b</option>
+                <option value="fraction">Fraction-first (a/b, decimal, % all normalize)</option>
               </select>
             </div>
             <div class="field sm-4">
@@ -276,9 +275,12 @@
               <thead>
                 <tr>
                   <th>Rarity</th>
-                  <th>Probability Input</th>
+                  <th>Numerator</th>
+                  <th>Denominator</th>
+                  <th>Pin</th>
                   <th>Decimal</th>
                   <th>Reduced Fraction</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody id="wildcardBody"></tbody>

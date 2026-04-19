@@ -71,7 +71,7 @@
         editingSetId: initialSet.id,
         editingPackId: initialPack.id,
         locale: "en-US",
-        probInputMode: "decimal",
+        probInputMode: "fraction",
         nudgePins: {},
         migrationNoticeHtml: ""
       },
@@ -93,7 +93,8 @@
       wildcardInputs: clone(initialPack.wildcardInputs),
       pinnedFolderReady: false,
       validationDraft: {
-        wildcardDirty: {}
+        wildcardDirty: {},
+        wildcardPendingInvalid: {}
       }
     };
   }
@@ -275,7 +276,7 @@
 
     const firstSetId = targetState.sets[0].id;
     if (!targetState.ui || typeof targetState.ui !== "object") {
-      targetState.ui = { activeTab: "welcome", editingSetId: firstSetId, editingPackId: "", locale: "en-US", probInputMode: "decimal", nudgePins: {}, migrationNoticeHtml: "" };
+      targetState.ui = { activeTab: "welcome", editingSetId: firstSetId, editingPackId: "", locale: "en-US", probInputMode: "fraction", nudgePins: {}, migrationNoticeHtml: "" };
     }
     if (!targetState.pack || typeof targetState.pack !== "object") {
       targetState.pack = { setId: firstSetId, cardsPerPack: 10, packsPerBox: 36, boxesPerCarton: 6, slotPlan: [] };
@@ -290,6 +291,7 @@
     if (!targetState.ui.nudgePins || typeof targetState.ui.nudgePins !== "object") {
       targetState.ui.nudgePins = {};
     }
+    targetState.ui.probInputMode = "fraction";
   }
 
   function normalizePackRecord(packRecord, fallbackSetId) {
@@ -469,7 +471,7 @@
         overrideMin: Number(existing.overrideMin || 0)
       };
       if (targetState.wildcardInputs[r.id] == null) {
-        targetState.wildcardInputs[r.id] = "0";
+        targetState.wildcardInputs[r.id] = "0/1";
       }
     });
 
@@ -569,6 +571,30 @@
     return `${frac.n}/${frac.d}${frac.approx ? " (approx)" : ""}`;
   }
 
+  function splitWildcardInputParts(raw) {
+    const text = String(raw ?? "").trim();
+    const slash = text.indexOf("/");
+    if (slash < 0) {
+      return { numRaw: text, denRaw: "" };
+    }
+    return {
+      numRaw: text.slice(0, slash).trim(),
+      denRaw: text.slice(slash + 1).trim()
+    };
+  }
+
+  function composeWildcardInput(numRaw, denRaw) {
+    const n = String(numRaw ?? "").trim();
+    const d = String(denRaw ?? "").trim();
+    if (!d) return n;
+    return `${n}/${d}`;
+  }
+
+  function normalizeProbabilityToFraction(value) {
+    const frac = toFractionApprox(value, FRACTION_DENOM_CAP);
+    return { n: frac.n, d: frac.d, text: `${frac.n}/${frac.d}`, approx: frac.approx };
+  }
+
   function parseFractionInput(text) {
     const raw = String(text || "").trim();
     const m = raw.match(/^\s*(\d+)\s*\/\s*(\d+)\s*$/);
@@ -587,13 +613,30 @@
     return { ok: true, value: v };
   }
 
-  function parseProbabilityInput(raw, mode) {
-    if (mode === "fraction") return parseFractionInput(raw);
-    const v = Number(raw);
-    if (!Number.isFinite(v)) return { ok: false, error: "Enter a numeric decimal probability." };
-    if (v < -TOLERANCE) return { ok: false, error: "Probability cannot be negative." };
-    if (v > 1 + TOLERANCE) return { ok: false, error: "Probability must be <= 1." };
-    return { ok: true, value: v };
+  function parseProbabilityInput(raw, _mode) {
+    const text = String(raw ?? "").trim();
+    if (!text) {
+      return { ok: false, error: "Enter a fraction, decimal, or percent." };
+    }
+
+    if (text.includes("/")) {
+      return parseFractionInput(text);
+    }
+
+    const hasPercent = text.endsWith("%");
+    const numericText = hasPercent ? text.slice(0, -1).trim() : text;
+    const parsedNum = Number(numericText);
+    if (!Number.isFinite(parsedNum)) {
+      return { ok: false, error: "Enter fraction a/b, decimal, or percent value." };
+    }
+
+    const asProbability = hasPercent
+      ? parsedNum / 100
+      : (parsedNum > 1 ? parsedNum / 100 : parsedNum);
+
+    if (asProbability < -TOLERANCE) return { ok: false, error: "Probability cannot be negative." };
+    if (asProbability > 1 + TOLERANCE) return { ok: false, error: "Probability must be <= 1." };
+    return { ok: true, value: asProbability };
   }
 
   function trimLeadingZerosSafe(raw, mode) {
@@ -707,8 +750,8 @@
       let sum = 0;
       let parseBlocked = false;
       for (const r of eligibles) {
-        const input = sourceState.wildcardInputs[r.id] ?? "0";
-        const parsed = parseProbabilityInput(input, sourceState.ui.probInputMode);
+        const input = sourceState.wildcardInputs[r.id] ?? "0/1";
+        const parsed = parseProbabilityInput(input, "fraction");
         if (!parsed.ok) {
           if (strictMode) {
             errors.push({ key: `wildcard:${r.id}`, msg: `${r.name || r.shortcode}: ${parsed.error}` });
@@ -756,7 +799,7 @@
       const eligibles = rarities.filter((r) => activeState.packCriteria[r.id]?.wildcardEligible);
 
       const weighted = eligibles.map((r, idx) => {
-        const p = parseProbabilityInput(activeState.wildcardInputs[r.id] || "0", activeState.ui.probInputMode);
+        const p = parseProbabilityInput(activeState.wildcardInputs[r.id] || "0/1", "fraction");
         const prob = p.ok ? p.value : 0;
         const expected = prob * wildcardCardsTotal;
         return { id: r.id, idx, prob, expected, rounded: Math.floor(expected), frac: expected - Math.floor(expected) };
@@ -1049,8 +1092,8 @@
     let dirtyCount = 0;
 
     eligibles.forEach((r) => {
-      const input = String(state.wildcardInputs[r.id] ?? "0");
-      const parsed = parseProbabilityInput(input, state.ui.probInputMode);
+      const input = String(state.wildcardInputs[r.id] ?? "0/1");
+      const parsed = parseProbabilityInput(input, "fraction");
       if (state.validationDraft.wildcardDirty[r.id]) {
         dirtyCount += 1;
       }
@@ -1127,27 +1170,49 @@
 
     eligibles.forEach((r) => {
       if (state.wildcardInputs[r.id] == null) {
-        state.wildcardInputs[r.id] = "0";
+        state.wildcardInputs[r.id] = "0/1";
       }
       const input = String(state.wildcardInputs[r.id]);
-      const parsed = parseProbabilityInput(input, state.ui.probInputMode);
-      const pending = state.validationDraft.wildcardDirty[r.id] && !parsed.ok;
+      const parsed = parseProbabilityInput(input, "fraction");
+      const parts = splitWildcardInputParts(input);
+      const canonical = parsed.ok ? normalizeProbabilityToFraction(parsed.value) : null;
+      const pending = !!state.validationDraft.wildcardDirty[r.id];
+      const isPendingInvalid = !!state.validationDraft.wildcardPendingInvalid[r.id] || !parsed.ok;
+      const pendingText = isPendingInvalid
+        ? "Pending-invalid. Validate on blur or recalc."
+        : "Pending. Validate on blur or recalc.";
       let decimalDisplay = "-";
       let fractionDisplay = "-";
       if (parsed.ok) {
         decimalDisplay = parsed.value.toFixed(9);
-        fractionDisplay = renderFractionText(parsed.value);
+        fractionDisplay = `${canonical.n}/${canonical.d}`;
       }
 
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>${escapeHtml(r.name || r.shortcode)}</td>
         <td>
-          <input aria-label="${escapeHtml(r.name)} probability input" data-role="wildcard-input" data-id="${r.id}" type="text" value="${escapeHtml(input)}">
-          ${pending ? '<div class="status pending">Pending-invalid. Validate on blur or recalc.</div>' : ""}
+          <div class="fraction-control">
+            <button class="tiny-btn" data-role="wildcard-nudge" data-field="num" data-dir="-1" data-id="${r.id}" title="Decrease numerator by 1">-</button>
+            <input aria-label="${escapeHtml(r.name)} numerator (accepts fraction, decimal, or percent)" data-role="wildcard-num" data-id="${r.id}" type="text" value="${escapeHtml(parts.numRaw)}">
+            <button class="tiny-btn" data-role="wildcard-nudge" data-field="num" data-dir="1" data-id="${r.id}" title="Increase numerator by 1">+</button>
+          </div>
+        </td>
+        <td>
+          <div class="fraction-control">
+            <button class="tiny-btn" data-role="wildcard-nudge" data-field="den" data-dir="-1" data-id="${r.id}" title="Decrease denominator by 1">-</button>
+            <input aria-label="${escapeHtml(r.name)} denominator" data-role="wildcard-den" data-id="${r.id}" type="text" value="${escapeHtml(parts.denRaw)}">
+            <button class="tiny-btn" data-role="wildcard-nudge" data-field="den" data-dir="1" data-id="${r.id}" title="Increase denominator by 1">+</button>
+          </div>
+        </td>
+        <td>
+          <label class="pin-wrap"><input type="checkbox" data-role="wildcard-pin" data-id="${r.id}" ${state.ui.nudgePins?.[r.id] ? "checked" : ""}> Pin</label>
         </td>
         <td class="mono">${escapeHtml(decimalDisplay)}</td>
         <td class="mono">${escapeHtml(fractionDisplay)}</td>
+        <td>
+          ${pending ? `<div class="status pending">${pendingText}</div>` : ""}
+        </td>
       `;
       body.appendChild(tr);
     });
@@ -1287,7 +1352,9 @@
     byId("runPacks").value = state.run.packs;
     byId("roundingPolicy").value = state.run.roundingPolicy;
     byId("perCardOverrideMode").checked = !!state.run.perCardOverrideMode;
-    byId("probInputMode").value = state.ui.probInputMode;
+    state.ui.probInputMode = "fraction";
+    byId("probInputMode").value = "fraction";
+    byId("probInputMode").disabled = true;
     byId("localeSelect").value = state.ui.locale;
 
     renderRarityTable();
@@ -1315,12 +1382,12 @@
       return byId("packSlotGrid").querySelector(`select[data-role='pack-slot'][data-index='${index}']`);
     }
     if (key === "wildcard:sum") {
-      const first = byId("wildcardBody").querySelector("input[data-role='wildcard-input']");
+      const first = byId("wildcardBody").querySelector("input[data-role='wildcard-num']");
       return first || null;
     }
     if (key.startsWith("wildcard:")) {
       const id = key.split(":")[1];
-      return byId("wildcardBody").querySelector(`input[data-role='wildcard-input'][data-id='${id}']`);
+      return byId("wildcardBody").querySelector(`input[data-role='wildcard-num'][data-id='${id}']`);
     }
     if (key.startsWith("rarity:")) {
       const [, idx, field] = key.split(":");
@@ -1457,7 +1524,9 @@
       next.ui.editingSetId = legacySet.id;
       next.pack.setId = legacySet.id;
     }
-    if (!next.validationDraft || typeof next.validationDraft !== "object") next.validationDraft = { wildcardDirty: {} };
+    if (!next.validationDraft || typeof next.validationDraft !== "object") next.validationDraft = { wildcardDirty: {}, wildcardPendingInvalid: {} };
+    if (!next.validationDraft.wildcardDirty || typeof next.validationDraft.wildcardDirty !== "object") next.validationDraft.wildcardDirty = {};
+    if (!next.validationDraft.wildcardPendingInvalid || typeof next.validationDraft.wildcardPendingInvalid !== "object") next.validationDraft.wildcardPendingInvalid = {};
     if (!Array.isArray(next.packs) || next.packs.length === 0) {
       const legacyPack = makeDefaultPack(next.pack?.setId || next.sets[0].id);
       legacyPack.cardsPerPack = Number(next.pack.cardsPerPack || legacyPack.cardsPerPack);
@@ -1800,7 +1869,7 @@
         setCount: 1
       });
       state.packCriteria[id] = makeDefaultPackCriteria();
-      state.wildcardInputs[id] = "0";
+      state.wildcardInputs[id] = "0/1";
       syncPackConfiguration(state);
       pushHistory("add-rarity");
       persistState();
@@ -1855,11 +1924,8 @@
     });
 
     byId("probInputMode").addEventListener("change", (e) => {
-      state.ui.probInputMode = e.target.value;
-      pushHistory("prob-mode");
-      persistState();
-      renderWildcardTable();
-      scheduleRecalc();
+      state.ui.probInputMode = "fraction";
+      e.target.value = "fraction";
     });
 
     byId("localeSelect").addEventListener("change", (e) => {
@@ -1871,6 +1937,8 @@
 
     byId("wildcardBody").addEventListener("input", onWildcardTyping);
     byId("wildcardBody").addEventListener("blur", onWildcardCommit, true);
+    byId("wildcardBody").addEventListener("click", onWildcardNudgeClick);
+    byId("wildcardBody").addEventListener("change", onWildcardPinChange);
     byId("internals").addEventListener("click", onPerCardNudgeClick);
     byId("internals").addEventListener("change", onPerCardPinChange);
     byId("errorSummary").addEventListener("click", (e) => {
@@ -1896,7 +1964,9 @@
 
     byId("resetWildcardBtn").addEventListener("click", () => {
       (getPackSet(state)?.rarities || []).filter((r) => state.packCriteria[r.id]?.wildcardEligible).forEach((r) => {
-        state.wildcardInputs[r.id] = "0";
+        state.wildcardInputs[r.id] = "0/1";
+        state.validationDraft.wildcardDirty[r.id] = false;
+        state.validationDraft.wildcardPendingInvalid[r.id] = false;
       });
       pushHistory("reset-wildcards");
       persistState();
@@ -2249,8 +2319,9 @@
 
     state.packCriteria[id].wildcardEligible = e.target.checked;
     if (!e.target.checked) {
-      state.wildcardInputs[id] = "0";
+      state.wildcardInputs[id] = "0/1";
       state.validationDraft.wildcardDirty[id] = false;
+      state.validationDraft.wildcardPendingInvalid[id] = false;
     }
 
     pushHistory("wildcard-eligibility");
@@ -2259,32 +2330,194 @@
     scheduleRecalc();
   }
 
+  function setWildcardInputFromRow(id) {
+    const numNode = byId("wildcardBody").querySelector(`input[data-role='wildcard-num'][data-id='${id}']`);
+    const denNode = byId("wildcardBody").querySelector(`input[data-role='wildcard-den'][data-id='${id}']`);
+    if (!numNode) return;
+    state.wildcardInputs[id] = composeWildcardInput(numNode.value, denNode ? denNode.value : "");
+  }
+
+  function applyWildcardRedistribution(targetId, previousTargetProb) {
+    const eligibles = (getPackSet(state)?.rarities || []).filter((r) => state.packCriteria[r.id]?.wildcardEligible);
+    const targetRaw = state.wildcardInputs[targetId] ?? "0/1";
+    const targetParsed = parseProbabilityInput(targetRaw, "fraction");
+    if (!targetParsed.ok) {
+      return { ok: false, message: "Nudge applied, but this row is now pending-invalid. Fix numerator/denominator before calculating." };
+    }
+
+    const delta = targetParsed.value - previousTargetProb;
+    const pinned = state.ui.nudgePins || {};
+    const donorRows = eligibles
+      .filter((r) => r.id !== targetId && !pinned[r.id])
+      .map((r) => {
+        const parsed = parseProbabilityInput(state.wildcardInputs[r.id] ?? "0/1", "fraction");
+        return { id: r.id, prob: parsed.ok ? parsed.value : 0 };
+      });
+
+    if (Math.abs(delta) <= TOLERANCE) {
+      state.wildcardInputs[targetId] = normalizeProbabilityToFraction(targetParsed.value).text;
+      state.validationDraft.wildcardDirty[targetId] = false;
+      state.validationDraft.wildcardPendingInvalid[targetId] = false;
+      return { ok: true };
+    }
+
+    if (!donorRows.length) {
+      return { ok: false, message: "Nudge applied, but redistribution is impossible with current pins. Row is now pending-invalid." };
+    }
+
+    const next = new Map();
+    next.set(targetId, targetParsed.value);
+
+    if (delta > 0) {
+      const donorTotal = donorRows.reduce((sum, row) => sum + row.prob, 0);
+      if (donorTotal + TOLERANCE < delta) {
+        return { ok: false, message: "Nudge applied, but unpinned donor mass is insufficient. Row is now pending-invalid." };
+      }
+      donorRows.forEach((row) => {
+        const share = donorTotal > TOLERANCE ? row.prob / donorTotal : 0;
+        next.set(row.id, row.prob - (delta * share));
+      });
+    } else {
+      const amount = -delta;
+      const donorRoom = donorRows.reduce((sum, row) => sum + (1 - row.prob), 0);
+      if (donorRoom + TOLERANCE < amount) {
+        return { ok: false, message: "Nudge applied, but no room remains to absorb the shift. Row is now pending-invalid." };
+      }
+      donorRows.forEach((row) => {
+        const room = 1 - row.prob;
+        const share = donorRoom > TOLERANCE ? room / donorRoom : 0;
+        next.set(row.id, row.prob + (amount * share));
+      });
+    }
+
+    const adjustedIds = [targetId].concat(donorRows.map((row) => row.id));
+    let sum = 0;
+    adjustedIds.forEach((id) => {
+      const value = next.get(id);
+      if (!Number.isFinite(value) || value < -TOLERANCE || value > 1 + TOLERANCE) {
+        sum = Number.NaN;
+        return;
+      }
+      sum += value;
+    });
+    if (!Number.isFinite(sum)) {
+      return { ok: false, message: "Nudge applied, but redistribution created invalid values. Row is pending-invalid." };
+    }
+
+    const remainder = 1 - sum;
+    if (Math.abs(remainder) > TOLERANCE) {
+      const rebalanceId = donorRows.length ? donorRows[0].id : targetId;
+      const rebalanceValue = (next.get(rebalanceId) || 0) + remainder;
+      if (rebalanceValue < -TOLERANCE || rebalanceValue > 1 + TOLERANCE) {
+        return { ok: false, message: "Nudge applied, but final rebalance failed. Row is now pending-invalid." };
+      }
+      next.set(rebalanceId, rebalanceValue);
+    }
+
+    adjustedIds.forEach((id) => {
+      const clamped = Math.min(1, Math.max(0, next.get(id) || 0));
+      state.wildcardInputs[id] = normalizeProbabilityToFraction(clamped).text;
+      state.validationDraft.wildcardDirty[id] = false;
+      state.validationDraft.wildcardPendingInvalid[id] = false;
+    });
+    return { ok: true };
+  }
+
   function onWildcardTyping(e) {
     const role = e.target.dataset.role;
-    if (role !== "wildcard-input") return;
+    if (!["wildcard-input", "wildcard-num", "wildcard-den"].includes(role)) return;
     const id = e.target.dataset.id;
-    state.wildcardInputs[id] = e.target.value;
+    if (!id) return;
+    if (role === "wildcard-input") {
+      state.wildcardInputs[id] = e.target.value;
+    } else {
+      setWildcardInputFromRow(id);
+    }
     state.validationDraft.wildcardDirty[id] = true;
+    state.validationDraft.wildcardPendingInvalid[id] = false;
     persistState();
     renderWildcardFeedback();
   }
 
   function onWildcardCommit(e) {
     const role = e.target.dataset.role;
-    if (role !== "wildcard-input") return;
+    if (!["wildcard-input", "wildcard-num", "wildcard-den"].includes(role)) return;
     const id = e.target.dataset.id;
-    state.validationDraft.wildcardDirty[id] = false;
-    state.wildcardInputs[id] = trimLeadingZerosSafe(state.wildcardInputs[id], state.ui.probInputMode);
-    const parsed = parseProbabilityInput(state.wildcardInputs[id], state.ui.probInputMode);
+    if (!id) return;
+
+    if (role !== "wildcard-input") {
+      setWildcardInputFromRow(id);
+    }
+
+    state.wildcardInputs[id] = trimLeadingZerosSafe(state.wildcardInputs[id], "fraction");
+    const parsed = parseProbabilityInput(state.wildcardInputs[id], "fraction");
     if (!parsed.ok) {
+      state.validationDraft.wildcardDirty[id] = true;
+      state.validationDraft.wildcardPendingInvalid[id] = true;
+      persistState();
       renderWildcardTable();
       scheduleRecalc();
       return;
     }
+
+    state.wildcardInputs[id] = normalizeProbabilityToFraction(parsed.value).text;
+    state.validationDraft.wildcardDirty[id] = false;
+    state.validationDraft.wildcardPendingInvalid[id] = false;
     pushHistory("wildcard-commit");
     persistState();
     renderWildcardTable();
     scheduleRecalc();
+  }
+
+  function onWildcardNudgeClick(e) {
+    const role = e.target.dataset.role;
+    if (role !== "wildcard-nudge") return;
+    const id = e.target.dataset.id;
+    const field = e.target.dataset.field;
+    const dir = Number(e.target.dataset.dir);
+    if (!id || !["num", "den"].includes(field) || !Number.isFinite(dir) || ![-1, 1].includes(dir)) return;
+
+    if (!state.ui.nudgePins || typeof state.ui.nudgePins !== "object") {
+      state.ui.nudgePins = {};
+    }
+    if (state.ui.nudgePins[id]) {
+      showToast("error", "This rarity is pinned in wildcard controls. Unpin before nudging.");
+      return;
+    }
+
+    const parsedBefore = parseProbabilityInput(state.wildcardInputs[id] ?? "0/1", "fraction");
+    const fractionBefore = parsedBefore.ok ? normalizeProbabilityToFraction(parsedBefore.value) : { n: 0, d: 1 };
+
+    const nextNum = field === "num" ? fractionBefore.n + dir : fractionBefore.n;
+    const nextDen = field === "den" ? fractionBefore.d + dir : fractionBefore.d;
+    state.wildcardInputs[id] = `${nextNum}/${nextDen}`;
+    state.validationDraft.wildcardDirty[id] = true;
+    state.validationDraft.wildcardPendingInvalid[id] = false;
+
+    const redistribute = applyWildcardRedistribution(id, parsedBefore.ok ? parsedBefore.value : 0);
+    if (!redistribute.ok) {
+      state.validationDraft.wildcardPendingInvalid[id] = true;
+      showToast("error", redistribute.message);
+    }
+
+    pushHistory("wildcard-nudge");
+    persistState();
+    renderWildcardTable();
+    scheduleRecalc();
+  }
+
+  function onWildcardPinChange(e) {
+    const role = e.target.dataset.role;
+    if (role !== "wildcard-pin") return;
+    const id = e.target.dataset.id;
+    if (!id) return;
+
+    if (!state.ui.nudgePins || typeof state.ui.nudgePins !== "object") {
+      state.ui.nudgePins = {};
+    }
+    state.ui.nudgePins[id] = !!e.target.checked;
+    pushHistory("wildcard-pin");
+    persistState();
   }
 
   function onRuleMove(e) {
@@ -2317,7 +2550,7 @@
     if (!eligibles.length) return;
 
     const parsedRows = eligibles.map((r, idx) => {
-      const p = parseProbabilityInput(state.wildcardInputs[r.id] || "0", state.ui.probInputMode);
+      const p = parseProbabilityInput(state.wildcardInputs[r.id] || "0/1", "fraction");
       return { rarity: r, idx, value: p.ok ? p.value : 0, valid: p.ok };
     });
 
@@ -2336,12 +2569,7 @@
       return;
     }
 
-    if (state.ui.probInputMode === "fraction") {
-      const f = toFractionApprox(nextValue, FRACTION_DENOM_CAP);
-      state.wildcardInputs[target.rarity.id] = `${f.n}/${f.d}`;
-    } else {
-      state.wildcardInputs[target.rarity.id] = String(nextValue);
-    }
+    state.wildcardInputs[target.rarity.id] = normalizeProbabilityToFraction(nextValue).text;
 
     pushHistory("snap-tolerance");
     persistState();
@@ -2476,8 +2704,8 @@
     const cardStep = 1 * direction;
     const probDelta = cardStep / Math.max(slotMass, TOLERANCE);
 
-    const targetInput = state.wildcardInputs[rarityId] ?? "0";
-    const targetParsed = parseProbabilityInput(targetInput, state.ui.probInputMode);
+    const targetInput = state.wildcardInputs[rarityId] ?? "0/1";
+    const targetParsed = parseProbabilityInput(targetInput, "fraction");
     const targetProb = targetParsed.ok ? targetParsed.value : 0;
     const nextTargetProb = targetProb + probDelta;
 
@@ -2487,7 +2715,7 @@
     }
 
     const donorParsed = donorIds.map((id) => {
-      const parsed = parseProbabilityInput(state.wildcardInputs[id] ?? "0", state.ui.probInputMode);
+      const parsed = parseProbabilityInput(state.wildcardInputs[id] ?? "0/1", "fraction");
       return { id, prob: parsed.ok ? parsed.value : 0 };
     });
     const donorTotal = donorParsed.reduce((sum, d) => sum + d.prob, 0);
@@ -2513,12 +2741,8 @@
 
     nextProbs.forEach((prob, id) => {
       const clamped = Math.min(1, Math.max(0, prob));
-      if (state.ui.probInputMode === "fraction") {
-        const frac = toFractionApprox(clamped, FRACTION_DENOM_CAP);
-        state.wildcardInputs[id] = `${frac.n}/${frac.d}`;
-      } else {
-        state.wildcardInputs[id] = String(clamped);
-      }
+      state.wildcardInputs[id] = normalizeProbabilityToFraction(clamped).text;
+      state.validationDraft.wildcardDirty[id] = false;
     });
 
     pushHistory("nudge-per-card");
