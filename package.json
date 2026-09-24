@@ -1,0 +1,13 @@
+{
+  "name": "@cipherfall/ccg-builder",
+  "private": true,
+  "scripts": {
+    "cf:check": "wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "wrangler": "4.134.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

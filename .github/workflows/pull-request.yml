@@ -40,4 +40,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - run: npx --yes wrangler@4.134.0 deploy --dry-run
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --prefer-offline --no-audit --no-fund
+      - run: npm run cf:check
