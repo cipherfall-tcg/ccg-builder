@@ -12,8 +12,9 @@ permissions:
 jobs:
   merge:
     name: Auto merge / Trusted labeled PR
-    if: github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+    # PR-target runs merge in the trusted validation workflow against its exact head.
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'pull_request_target'
+    runs-on: [self-hosted, Linux, X64, cipherfall-release]
     timeout-minutes: 5
     steps:
       - name: Merge an opted-in trusted pull request
