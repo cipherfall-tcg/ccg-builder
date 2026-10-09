@@ -54,6 +54,9 @@ Do not enable arbitrary public fork workflows on credential-bearing runners.
 CCG Builder uses `pull_request_target` (the trusted base workflow), allows only
 same-repository PRs from OWNER/MEMBER/COLLABORATOR, checks out the exact PR head,
 and disables persisted checkout credentials. Fork PR jobs are skipped.
+Both auto-merge paths pin the merge to the validated head. The legacy
+`workflow_run` path accepts only successful `pull_request` runs; push and merge
+queue runs cannot authorize a PR merge.
 PR validation workflow changes take effect only after merging into the base
 branch; bootstrap this routing change with local policy validation/manual review.
 
@@ -66,7 +69,7 @@ of the Cipherfall product release script.
 ## Verification
 
 ```bash
-node --test .github/tests/self-hosted-workflows.test.mjs
+node --test .github/tests/*.test.mjs
 ```
 
 The Actions policy job checks every workflow's runner targets. Inspect a completed

@@ -32,7 +32,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - run: node --test .github/tests/self-hosted-workflows.test.mjs
+      - run: node --test .github/tests/*.test.mjs
 
       - name: Publish validation check on the tested PR head
         if: always() && github.event_name == 'pull_request_target'
