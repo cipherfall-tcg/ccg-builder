@@ -1,25 +1,74 @@
 name: CCG Builder validation
 
 on:
-  pull_request:
+  # Use the trusted base workflow; fork PR code is never executed on this pool.
+  pull_request_target:
   merge_group:
   push:
     branches: [main]
 
 permissions:
   contents: read
+  checks: write
 
 concurrency:
   group: ccg-builder-validation-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  javascript:
-    name: CCG Builder / JavaScript syntax
-    runs-on: ubuntu-latest
+  workflow-policy:
+    name: Actions / Self-hosted runner policy
+    if: >-
+      github.event_name != 'pull_request_target' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    runs-on: [self-hosted, Linux, X64, cipherfall-release]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node --test .github/tests/*.test.mjs
+
+      - name: Publish validation check on the tested PR head
+        if: always() && github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          JOB_STATUS: ${{ job.status }}
+          JOB_ID: ${{ github.job }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$JOB_ID" in
+            workflow-policy) check_name="Actions / Self-hosted runner policy" ;;
+            javascript) check_name="CCG Builder / JavaScript syntax" ;;
+            worker) check_name="CCG Builder / Worker dry run" ;;
+            *) exit 1 ;;
+          esac
+          gh api --method POST "repos/$REPOSITORY/check-runs" \
+            -f name="$check_name" -f head_sha="$HEAD_SHA" \
+            -f status=completed -f conclusion="$JOB_STATUS" -f details_url="$RUN_URL"
+
+  javascript:
+    name: CCG Builder / JavaScript syntax
+    if: >-
+      github.event_name != 'pull_request_target' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    runs-on: [self-hosted, Linux, X64, cipherfall-release]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -31,12 +80,41 @@ jobs:
             node --check "$file"
           done
 
+      - name: Publish validation check on the tested PR head
+        if: always() && github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          JOB_STATUS: ${{ job.status }}
+          JOB_ID: ${{ github.job }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$JOB_ID" in
+            workflow-policy) check_name="Actions / Self-hosted runner policy" ;;
+            javascript) check_name="CCG Builder / JavaScript syntax" ;;
+            worker) check_name="CCG Builder / Worker dry run" ;;
+            *) exit 1 ;;
+          esac
+          gh api --method POST "repos/$REPOSITORY/check-runs" \
+            -f name="$check_name" -f head_sha="$HEAD_SHA" \
+            -f status=completed -f conclusion="$JOB_STATUS" -f details_url="$RUN_URL"
+
   worker:
     name: CCG Builder / Worker dry run
-    runs-on: ubuntu-latest
+    if: >-
+      github.event_name != 'pull_request_target' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    runs-on: [self-hosted, Linux, X64, cipherfall-release]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -44,3 +122,71 @@ jobs:
           cache-dependency-path: package-lock.json
       - run: npm ci --prefer-offline --no-audit --no-fund
       - run: npm run cf:check
+
+      - name: Publish validation check on the tested PR head
+        if: always() && github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          JOB_STATUS: ${{ job.status }}
+          JOB_ID: ${{ github.job }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$JOB_ID" in
+            workflow-policy) check_name="Actions / Self-hosted runner policy" ;;
+            javascript) check_name="CCG Builder / JavaScript syntax" ;;
+            worker) check_name="CCG Builder / Worker dry run" ;;
+            *) exit 1 ;;
+          esac
+          gh api --method POST "repos/$REPOSITORY/check-runs" \
+            -f name="$check_name" -f head_sha="$HEAD_SHA" \
+            -f status=completed -f conclusion="$JOB_STATUS" -f details_url="$RUN_URL"
+
+  trusted-auto-merge:
+    name: Auto merge / Trusted labeled PR
+    needs: [workflow-policy, javascript, worker]
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+    runs-on: [self-hosted, Linux, X64, cipherfall-release]
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Merge only the validated head of an opted-in PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr_number="$PR_NUMBER"
+          if [[ -z "$pr_number" ]]; then
+            echo "No pull request is associated with this workflow run."
+            exit 0
+          fi
+
+          pr="$(gh api "repos/$REPOSITORY/pulls/$pr_number")"
+          state="$(jq -r '.state' <<<"$pr")"
+          draft="$(jq -r '.draft' <<<"$pr")"
+          head_repo="$(jq -r '.head.repo.full_name' <<<"$pr")"
+          association="$(jq -r '.author_association' <<<"$pr")"
+          labels="$(jq -r '[.labels[].name] | index("automerge") != null' <<<"$pr")"
+
+          if [[ "$state" != "open" || "$draft" != "false" || "$head_repo" != "$REPOSITORY" || "$labels" != "true" ]]; then
+            echo "PR #$pr_number is not an open, non-draft, same-repository PR labeled automerge."
+            exit 0
+          fi
+          case "$association" in
+            OWNER|MEMBER|COLLABORATOR) ;;
+            *) echo "PR #$pr_number is not from a trusted collaborator."; exit 0 ;;
+          esac
+
+          gh pr merge "$pr_number" --repo "$REPOSITORY" --match-head-commit "$HEAD_SHA" --squash --delete-branch

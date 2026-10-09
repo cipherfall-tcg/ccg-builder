@@ -12,14 +12,16 @@ permissions:
 jobs:
   merge:
     name: Auto merge / Trusted labeled PR
-    if: github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+    # PR-target runs merge in the trusted validation workflow against its exact head.
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
+    runs-on: [self-hosted, Linux, X64, cipherfall-release]
     timeout-minutes: 5
     steps:
       - name: Merge an opted-in trusted pull request
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -45,4 +47,9 @@ jobs:
             *) echo "PR #$pr_number is not from a trusted collaborator."; exit 0 ;;
           esac
 
-          gh pr merge "$pr_number" --repo "$REPOSITORY" --squash --delete-branch
+          if [[ -z "$HEAD_SHA" || "$(jq -r '.head.sha' <<<"$pr")" != "$HEAD_SHA" ]]; then
+            echo "PR #$pr_number no longer matches the validated head."
+            exit 0
+          fi
+
+          gh pr merge "$pr_number" --repo "$REPOSITORY" --match-head-commit "$HEAD_SHA" --squash --delete-branch
