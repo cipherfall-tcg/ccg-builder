@@ -64,3 +64,11 @@ CCG Builder is a browser-only balancing tool for defining sets, composing packs,
 - Open `index.html` directly in a browser.
 - Keep payload schema changes in `report_payload.js` and presentation changes in `report_templates.js`.
 - If UI behavior changes, update `requirements.md` and `DATAFLOW.md` in the same change.
+
+## Tooling maintenance
+
+Wrangler is pinned to 4.152.0 with Undici 7.30.1 for its Miniflare transport. Review
+and remove the override when the parent adopts a patched transport version.
+Use `npm ci` for the reproducible development toolchain, parse root JavaScript
+with `node --check`, and run `npm run cf:check` for a deployment dry run. Dependency
+audit results describe the tooling inventory; publication remains separate.
