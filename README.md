@@ -80,6 +80,7 @@ Retain existing tests; add these CLI fixtures for changed automation behavior.
 No browser/Android replay is needed for workflow-only changes. See
 [GitHub workflow-run events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run)
 and the [merge precondition](https://cli.github.com/manual/gh_pr_merge).
+
 ## Configuration identifiers
 
 Imported and restored identifiers must contain 1–128 ASCII letters, digits,
@@ -93,3 +94,10 @@ for the loopback-only Chromium regression. It covers set/rarity/pack/rule import
 and stored-state restoration, saved-state preservation and valid editing/reload.
 These are new browser cases; retain existing JavaScript parsing and Worker dry
 runs. There is no mobile app or account/provider integration in this static tool.
+## Tooling maintenance
+
+Wrangler is pinned to 4.152.0 with Undici 7.30.1 for its Miniflare transport. Review
+and remove the override when the parent adopts a patched transport version.
+Use `npm ci` for the reproducible development toolchain, parse root JavaScript
+with `node --check`, and run `npm run cf:check` for a deployment dry run. Dependency
+audit results describe the tooling inventory; publication remains separate.
