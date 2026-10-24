@@ -86,7 +86,7 @@
   function buildRarityColorOptions(selectedId) {
     return RARITY_COLOR_PALETTE.map((c) => {
       const selected = c.id === selectedId ? "selected" : "";
-      return `<option value="${c.id}" ${selected}>${escapeHtml(c.label)} (${c.hex})</option>`;
+      return `<option value="${escapeHtml(c.id)}" ${selected}>${escapeHtml(c.label)} (${c.hex})</option>`;
     }).join("");
   }
 
@@ -756,7 +756,7 @@
   function renderSetSelectors() {
     ensurePackSelections(state);
     ensureSetSelections(state);
-    const setOptions = state.sets.map((setDef) => `<option value="${setDef.id}">${escapeHtml(setDef.name || "Untitled Set")}</option>`).join("");
+    const setOptions = state.sets.map((setDef) => `<option value="${escapeHtml(setDef.id)}">${escapeHtml(setDef.name || "Untitled Set")}</option>`).join("");
     byId("setPickerSelect").innerHTML = setOptions;
     byId("setPickerSelect").value = state.ui.editingSetId;
     byId("packSetSelect").innerHTML = setOptions;
@@ -771,7 +771,7 @@
   function renderPackSelectors() {
     ensurePackSelections(state);
     const packOptions = state.packs
-      .map((packDef, idx) => `<option value="${packDef.id}">${escapeHtml(packDef.name || `Untitled Pack ${idx + 1}`)}</option>`)
+      .map((packDef, idx) => `<option value="${escapeHtml(packDef.id)}">${escapeHtml(packDef.name || `Untitled Pack ${idx + 1}`)}</option>`)
       .join("");
     byId("packPickerSelect").innerHTML = packOptions;
     byId("packPickerSelect").value = state.ui.editingPackId;
@@ -809,16 +809,16 @@
       const tr = document.createElement("tr");
       const tone = getRarityToneStyle(r.colorId);
       tr.innerHTML = `
-        <td style="${tone}"><input data-role="rarity-name" data-id="${r.id}" type="text" value="${escapeHtml(r.name || "")}"></td>
-        <td><input data-role="rarity-shortcode" data-id="${r.id}" type="text" value="${escapeHtml(r.shortcode || "")}"></td>
+        <td style="${tone}"><input data-role="rarity-name" data-id="${escapeHtml(r.id)}" type="text" value="${escapeHtml(r.name || "")}"></td>
+        <td><input data-role="rarity-shortcode" data-id="${escapeHtml(r.id)}" type="text" value="${escapeHtml(r.shortcode || "")}"></td>
         <td>
           <div class="rarity-color-picker">
             <span class="rarity-color-swatch" style="${getRarityColorSwatchStyle(r.colorId)}" aria-hidden="true"></span>
-            <select data-role="rarity-color" data-id="${r.id}" aria-label="Rarity color for ${escapeHtml(r.name || r.shortcode || r.id)}">${buildRarityColorOptions(r.colorId)}</select>
+            <select data-role="rarity-color" data-id="${escapeHtml(r.id)}" aria-label="Rarity color for ${escapeHtml(r.name || r.shortcode || r.id)}">${buildRarityColorOptions(r.colorId)}</select>
           </div>
         </td>
-        <td><input data-role="rarity-setCount" data-id="${r.id}" type="number" min="1" step="1" value="${Number(r.setCount || 1)}"></td>
-        <td><button data-role="rarity-delete" data-id="${r.id}" ${idx === 0 ? "" : ""}>Remove</button></td>
+        <td><input data-role="rarity-setCount" data-id="${escapeHtml(r.id)}" type="number" min="1" step="1" value="${Number(r.setCount || 1)}"></td>
+        <td><button data-role="rarity-delete" data-id="${escapeHtml(r.id)}" ${idx === 0 ? "" : ""}>Remove</button></td>
       `;
       body.appendChild(tr);
     });
@@ -875,8 +875,8 @@
         tile.classList.add("wildcard-rainbow-tile");
       }
       const options = ['<option value="">Select...</option>']
-        .concat(rarities.map((r) => `<option value="${r.id}" ${slot === r.id ? "selected" : ""}>${escapeHtml(r.name || r.shortcode || `Rarity ${index + 1}`)}</option>`))
-        .concat([`<option value="${WILDCARD_SLOT_ID}" ${slot === WILDCARD_SLOT_ID ? "selected" : ""}>Wildcard</option>`])
+        .concat(rarities.map((r) => `<option value="${escapeHtml(r.id)}" ${slot === r.id ? "selected" : ""}>${escapeHtml(r.name || r.shortcode || `Rarity ${index + 1}`)}</option>`))
+        .concat([`<option value="${escapeHtml(WILDCARD_SLOT_ID)}" ${slot === WILDCARD_SLOT_ID ? "selected" : ""}>Wildcard</option>`])
         .join("");
       tile.innerHTML = `
         <strong class="${isWildcardSlot ? "wildcard-rainbow-label" : ""}" ${selectedRarity ? `style="${getRarityToneStyle(selectedRarity.colorId)}padding:2px 6px;border-radius:4px;"` : ""}>Card ${index + 1}</strong>
@@ -892,8 +892,8 @@
       tr.innerHTML = `
         <td style="${getRarityToneStyle(r.colorId)}">${escapeHtml(r.name || r.shortcode)}</td>
         <td class="mono">${composition.countsByRarity[r.id] || 0}</td>
-        <td><input data-role="criteria-minCopies" data-id="${r.id}" type="number" min="0" step="1" value="${Number(criteria.minCopies || 0)}"></td>
-        <td><input data-role="criteria-overrideMin" data-id="${r.id}" type="number" min="0" step="1" value="${Number(criteria.overrideMin || 0)}"></td>
+        <td><input data-role="criteria-minCopies" data-id="${escapeHtml(r.id)}" type="number" min="0" step="1" value="${Number(criteria.minCopies || 0)}"></td>
+        <td><input data-role="criteria-overrideMin" data-id="${escapeHtml(r.id)}" type="number" min="0" step="1" value="${Number(criteria.overrideMin || 0)}"></td>
       `;
       criteriaBody.appendChild(tr);
     });
@@ -918,7 +918,7 @@
 
     const items = rarities.map((r) => {
       const criteria = state.packCriteria[r.id] || makeDefaultPackCriteria();
-      return `<label style="display:inline-flex;align-items:center;gap:6px;margin:0 12px 8px 0;padding:2px 8px;border-radius:4px;${getRarityToneStyle(r.colorId)}"><input data-role="wildcard-eligibility" data-id="${r.id}" type="checkbox" ${criteria.wildcardEligible ? "checked" : ""}> ${escapeHtml(r.name || r.shortcode)}</label>`;
+      return `<label style="display:inline-flex;align-items:center;gap:6px;margin:0 12px 8px 0;padding:2px 8px;border-radius:4px;${getRarityToneStyle(r.colorId)}"><input data-role="wildcard-eligibility" data-id="${escapeHtml(r.id)}" type="checkbox" ${criteria.wildcardEligible ? "checked" : ""}> ${escapeHtml(r.name || r.shortcode)}</label>`;
     }).join("");
 
     box.innerHTML = `
@@ -1051,20 +1051,20 @@
       tr.innerHTML = `
         <td style="${getRarityToneStyle(r.colorId)}">${escapeHtml(r.name || r.shortcode)}</td>
         <td class="pin-col">
-          <input type="checkbox" data-role="wildcard-pin" data-id="${r.id}" ${isPinned ? "checked" : ""} aria-label="Pin ${escapeHtml(r.name || r.shortcode)}">
+          <input type="checkbox" data-role="wildcard-pin" data-id="${escapeHtml(r.id)}" ${isPinned ? "checked" : ""} aria-label="Pin ${escapeHtml(r.name || r.shortcode)}">
         </td>
         <td>
           <div class="stacked-fraction">
             <div class="fraction-control">
-              <button class="tiny-btn" data-role="wildcard-nudge" data-field="num" data-dir="-1" data-id="${r.id}" data-lcd="${lcd}" title="Decrease numerator by 1">-</button>
-              <input aria-label="${escapeHtml(r.name || r.shortcode)} numerator" data-role="wildcard-num" data-id="${r.id}" type="text" value="${escapeHtml(parts.numRaw)}" class="wildcard-num-input">
-              <button class="tiny-btn" data-role="wildcard-nudge" data-field="num" data-dir="1" data-id="${r.id}" data-lcd="${lcd}" title="Increase numerator by 1">+</button>
+              <button class="tiny-btn" data-role="wildcard-nudge" data-field="num" data-dir="-1" data-id="${escapeHtml(r.id)}" data-lcd="${lcd}" title="Decrease numerator by 1">-</button>
+              <input aria-label="${escapeHtml(r.name || r.shortcode)} numerator" data-role="wildcard-num" data-id="${escapeHtml(r.id)}" type="text" value="${escapeHtml(parts.numRaw)}" class="wildcard-num-input">
+              <button class="tiny-btn" data-role="wildcard-nudge" data-field="num" data-dir="1" data-id="${escapeHtml(r.id)}" data-lcd="${lcd}" title="Increase numerator by 1">+</button>
             </div>
             <div class="frac-bar"></div>
             <div class="fraction-control">
-              <button class="tiny-btn" data-role="wildcard-nudge" data-field="den" data-dir="-1" data-id="${r.id}" data-lcd="${lcd}" title="Decrease denominator by 1">-</button>
-              <input aria-label="${escapeHtml(r.name || r.shortcode)} denominator" data-role="wildcard-den" data-id="${r.id}" type="text" value="${escapeHtml(parts.denRaw)}" class="wildcard-den-input">
-              <button class="tiny-btn" data-role="wildcard-nudge" data-field="den" data-dir="1" data-id="${r.id}" data-lcd="${lcd}" title="Increase denominator by 1">+</button>
+              <button class="tiny-btn" data-role="wildcard-nudge" data-field="den" data-dir="-1" data-id="${escapeHtml(r.id)}" data-lcd="${lcd}" title="Decrease denominator by 1">-</button>
+              <input aria-label="${escapeHtml(r.name || r.shortcode)} denominator" data-role="wildcard-den" data-id="${escapeHtml(r.id)}" type="text" value="${escapeHtml(parts.denRaw)}" class="wildcard-den-input">
+              <button class="tiny-btn" data-role="wildcard-nudge" data-field="den" data-dir="1" data-id="${escapeHtml(r.id)}" data-lcd="${lcd}" title="Increase denominator by 1">+</button>
             </div>
             <div class="frac-pct">${pct}</div>
           </div>
@@ -1072,15 +1072,15 @@
         <td>
           <div class="stacked-fraction">
             <div class="fraction-control">
-              <button class="tiny-btn" data-role="wildcard-nudge" data-field="lcd-num" data-dir="-1" data-id="${r.id}" data-lcd="${lcd}" title="Decrease LCD numerator by 1 (step -1/${lcd})">-</button>
+              <button class="tiny-btn" data-role="wildcard-nudge" data-field="lcd-num" data-dir="-1" data-id="${escapeHtml(r.id)}" data-lcd="${lcd}" title="Decrease LCD numerator by 1 (step -1/${lcd})">-</button>
               <span class="mono lcd-part">${canonical ? lcdNum : "-"}</span>
-              <button class="tiny-btn" data-role="wildcard-nudge" data-field="lcd-num" data-dir="1" data-id="${r.id}" data-lcd="${lcd}" title="Increase LCD numerator by 1 (step +1/${lcd})">+</button>
+              <button class="tiny-btn" data-role="wildcard-nudge" data-field="lcd-num" data-dir="1" data-id="${escapeHtml(r.id)}" data-lcd="${lcd}" title="Increase LCD numerator by 1 (step +1/${lcd})">+</button>
             </div>
             <div class="frac-bar"></div>
             <div class="fraction-control">
-              <button class="tiny-btn" data-role="wildcard-nudge" data-field="lcd-den" data-dir="-1" data-id="${r.id}" data-lcd="${lcd}" title="Decrease LCD denominator by 1">-</button>
+              <button class="tiny-btn" data-role="wildcard-nudge" data-field="lcd-den" data-dir="-1" data-id="${escapeHtml(r.id)}" data-lcd="${lcd}" title="Decrease LCD denominator by 1">-</button>
               <span class="mono lcd-part">${lcd}</span>
-              <button class="tiny-btn" data-role="wildcard-nudge" data-field="lcd-den" data-dir="1" data-id="${r.id}" data-lcd="${lcd}" title="Increase LCD denominator by 1">+</button>
+              <button class="tiny-btn" data-role="wildcard-nudge" data-field="lcd-den" data-dir="1" data-id="${escapeHtml(r.id)}" data-lcd="${lcd}" title="Increase LCD denominator by 1">+</button>
             </div>
             <div class="frac-pct">${canonical ? `${(lcdNum / lcd * 100).toFixed(1)}%` : "-"}</div>
           </div>
@@ -1122,8 +1122,8 @@
           <div class="adv">${escapeHtml(adviceText)}</div>
         </div>
         <div class="rule-controls">
-          <button data-role="rule-up" data-id="${rule.id}" aria-label="Move ${escapeHtml(rule.label)} up">Up</button>
-          <button data-role="rule-down" data-id="${rule.id}" aria-label="Move ${escapeHtml(rule.label)} down">Down</button>
+          <button data-role="rule-up" data-id="${escapeHtml(rule.id)}" aria-label="Move ${escapeHtml(rule.label)} up">Up</button>
+          <button data-role="rule-down" data-id="${escapeHtml(rule.id)}" aria-label="Move ${escapeHtml(rule.label)} down">Down</button>
         </div>
       `;
       box.appendChild(div);

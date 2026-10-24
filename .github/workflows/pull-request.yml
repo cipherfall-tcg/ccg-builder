@@ -23,6 +23,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+      - run: npm ci --prefer-offline --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
       - name: Parse JavaScript sources
         shell: bash
         run: |
