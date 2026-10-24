@@ -80,3 +80,16 @@ Retain existing tests; add these CLI fixtures for changed automation behavior.
 No browser/Android replay is needed for workflow-only changes. See
 [GitHub workflow-run events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run)
 and the [merge precondition](https://cli.github.com/manual/gh_pr_merge).
+## Configuration identifiers
+
+Imported and restored identifiers must contain 1–128 ASCII letters, digits,
+underscores or hyphens. Prototype-related names are reserved. Unsafe inputs are
+rejected as a whole before migration, preserving existing saved state; unsafe
+stored configurations fall back to defaults. Valid identifiers and references
+are retained without rewriting. Dynamic HTML attributes are also escaped.
+
+Run `npm ci`, `npx playwright install chromium`, then `npm run test:browser`
+for the loopback-only Chromium regression. It covers set/rarity/pack/rule import
+and stored-state restoration, saved-state preservation and valid editing/reload.
+These are new browser cases; retain existing JavaScript parsing and Worker dry
+runs. There is no mobile app or account/provider integration in this static tool.
