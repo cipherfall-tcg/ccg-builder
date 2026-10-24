@@ -23,6 +23,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+      - name: Test automation safeguards
+        run: npm test
       - name: Parse JavaScript sources
         shell: bash
         run: |

@@ -64,3 +64,19 @@ CCG Builder is a browser-only balancing tool for defining sets, composing packs,
 - Open `index.html` directly in a browser.
 - Keep payload schema changes in `report_payload.js` and presentation changes in `report_templates.js`.
 - If UI behavior changes, update `requirements.md` and `DATAFLOW.md` in the same change.
+
+## Automatic merge validation
+
+Opted-in trusted same-repository PRs merge only from a successful `pull_request`
+validation run. The current head must equal that run's recorded head SHA, and
+`gh pr merge --match-head-commit` enforces the same revision at merge time. A stale
+run skips; a push after the metadata read is rejected by the merge precondition.
+Existing author, open/non-draft, repository and `automerge` label gates remain.
+
+`node --test tests/automerge-head.test.mjs` executes the actual workflow shell
+with a local fake GitHub CLI, covering the current head, both race windows,
+invalid trigger/revision and retained trust gates. It performs no network merge.
+Retain existing tests; add these CLI fixtures for changed automation behavior.
+No browser/Android replay is needed for workflow-only changes. See
+[GitHub workflow-run events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run)
+and the [merge precondition](https://cli.github.com/manual/gh_pr_merge).
