@@ -101,3 +101,13 @@ and remove the override when the parent adopts a patched transport version.
 Use `npm ci` for the reproducible development toolchain, parse root JavaScript
 with `node --check`, and run `npm run cf:check` for a deployment dry run. Dependency
 audit results describe the tooling inventory; publication remains separate.
+
+## Combined safeguard regression
+
+The automation, identifier-validation and deployment-tooling changes can be
+validated together with `npm test`, `npm run test:browser` and `npm run cf:check`.
+The browser suite also rejects unsafe keyed references, preserves saved state on
+rejected imports, and exercises valid calculation, undo/redo, configuration
+fallback downloads, JSON report export and reload. It uses an owned loopback
+server and blocks external requests; it does not certify a host file-picker or
+pinned-directory permission flow. Retain all existing import and workflow cases.
