@@ -44,3 +44,9 @@ flowchart TD
 5. Redistribution adjusts unpinned eligible rows proportionally to preserve sum=1 where possible.
 6. Total-sum validation/rebalance accounts for pinned and unpinned rows.
 7. If redistribution fails, the edited row remains changed and pending-invalid until corrected.
+
+Combined regression follows JSON text through import validation, migration,
+localStorage, editing/history, calculation and fallback configuration/report
+downloads. Browser tests pass exact JSON text to the Load control so reserved
+object keys are tested as file content rather than browser-automation object
+serialization. Pinned-folder and host picker permissions remain separate paths.

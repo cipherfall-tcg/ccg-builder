@@ -64,3 +64,50 @@ CCG Builder is a browser-only balancing tool for defining sets, composing packs,
 - Open `index.html` directly in a browser.
 - Keep payload schema changes in `report_payload.js` and presentation changes in `report_templates.js`.
 - If UI behavior changes, update `requirements.md` and `DATAFLOW.md` in the same change.
+
+## Automatic merge validation
+
+Opted-in trusted same-repository PRs merge only from a successful `pull_request`
+validation run. The current head must equal that run's recorded head SHA, and
+`gh pr merge --match-head-commit` enforces the same revision at merge time. A stale
+run skips; a push after the metadata read is rejected by the merge precondition.
+Existing author, open/non-draft, repository and `automerge` label gates remain.
+
+`node --test tests/automerge-head.test.mjs` executes the actual workflow shell
+with a local fake GitHub CLI, covering the current head, both race windows,
+invalid trigger/revision and retained trust gates. It performs no network merge.
+Retain existing tests; add these CLI fixtures for changed automation behavior.
+No browser/Android replay is needed for workflow-only changes. See
+[GitHub workflow-run events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run)
+and the [merge precondition](https://cli.github.com/manual/gh_pr_merge).
+
+## Configuration identifiers
+
+Imported and restored identifiers must contain 1–128 ASCII letters, digits,
+underscores or hyphens. Prototype-related names are reserved. Unsafe inputs are
+rejected as a whole before migration, preserving existing saved state; unsafe
+stored configurations fall back to defaults. Valid identifiers and references
+are retained without rewriting. Dynamic HTML attributes are also escaped.
+
+Run `npm ci`, `npx playwright install chromium`, then `npm run test:browser`
+for the loopback-only Chromium regression. It covers set/rarity/pack/rule import
+and stored-state restoration, saved-state preservation and valid editing/reload.
+These are new browser cases; retain existing JavaScript parsing and Worker dry
+runs. There is no mobile app or account/provider integration in this static tool.
+## Tooling maintenance
+
+Wrangler is pinned to 4.152.0 with Undici 7.30.1 for its Miniflare transport. Review
+and remove the override when the parent adopts a patched transport version.
+Use `npm ci` for the reproducible development toolchain, parse root JavaScript
+with `node --check`, and run `npm run cf:check` for a deployment dry run. Dependency
+audit results describe the tooling inventory; publication remains separate.
+
+## Combined safeguard regression
+
+The automation, identifier-validation and deployment-tooling changes can be
+validated together with `npm test`, `npm run test:browser` and `npm run cf:check`.
+The browser suite also rejects unsafe keyed references, preserves saved state on
+rejected imports, and exercises valid calculation, undo/redo, configuration
+fallback downloads, JSON report export and reload. It uses an owned loopback
+server and blocks external requests; it does not certify a host file-picker or
+pinned-directory permission flow. Retain all existing import and workflow cases.

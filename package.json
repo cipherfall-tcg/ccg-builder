@@ -2,12 +2,18 @@
   "name": "@cipherfall/ccg-builder",
   "private": true,
   "scripts": {
-    "cf:check": "wrangler deploy --dry-run"
+    "cf:check": "wrangler deploy --dry-run",
+    "test": "node --test tests/automerge-head.test.mjs",
+    "test:browser": "node --test tests/import-safety.test.mjs"
   },
   "devDependencies": {
-    "wrangler": "4.134.0"
+    "@playwright/test": "1.63.0",
+    "wrangler": "4.152.0"
   },
   "engines": {
     "node": ">=22"
+  },
+  "overrides": {
+    "undici": "7.30.1"
   }
 }
