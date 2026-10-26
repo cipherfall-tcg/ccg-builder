@@ -78,3 +78,5 @@ for the loopback-only Chromium regression. It covers set/rarity/pack/rule import
 and stored-state restoration, saved-state preservation and valid editing/reload.
 These are new browser cases; retain existing JavaScript parsing and Worker dry
 runs. There is no mobile app or account/provider integration in this static tool.
+
+The seven-case browser suite also rejects unsafe keyed references and verifies valid calculation, undo/redo, fallback configuration downloads, JSON reports and reload. It blocks external browser requests and does not exercise host picker or pinned-directory permissions. Existing JavaScript syntax and Worker checks remain required.
