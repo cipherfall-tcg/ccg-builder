@@ -64,3 +64,19 @@ CCG Builder is a browser-only balancing tool for defining sets, composing packs,
 - Open `index.html` directly in a browser.
 - Keep payload schema changes in `report_payload.js` and presentation changes in `report_templates.js`.
 - If UI behavior changes, update `requirements.md` and `DATAFLOW.md` in the same change.
+
+## Configuration identifiers
+
+Imported and restored identifiers must contain 1–128 ASCII letters, digits,
+underscores or hyphens. Prototype-related names are reserved. Unsafe inputs are
+rejected as a whole before migration, preserving existing saved state; unsafe
+stored configurations fall back to defaults. Valid identifiers and references
+are retained without rewriting. Dynamic HTML attributes are also escaped.
+
+Run `npm ci`, `npx playwright install chromium`, then `npm run test:browser`
+for the loopback-only Chromium regression. It covers set/rarity/pack/rule import
+and stored-state restoration, saved-state preservation and valid editing/reload.
+These are new browser cases; retain existing JavaScript parsing and Worker dry
+runs. There is no mobile app or account/provider integration in this static tool.
+
+The seven-case browser suite also rejects unsafe keyed references and verifies valid calculation, undo/redo, fallback configuration downloads, JSON reports and reload. It blocks external browser requests and does not exercise host picker or pinned-directory permissions. Existing JavaScript syntax and Worker checks remain required.

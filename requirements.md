@@ -308,3 +308,8 @@ The wildcard table columns are, in order: **Rarity | Pin | Fraction | LCD | Redu
 4. Blocking validation errors must prevent calculation and report export.
 5. All persisted state and JSON imports must pass through migration/normalization before use.
 6. The action rail sidebar collapses at viewport widths ≤ 900 px.
+
+
+### Configuration import safety
+
+Reject unsafe set/rarity/pack/rule identifiers, cross references and reserved keyed-map identifiers before replacing current or persisted state. Apply the same boundary to startup restoration. Preserve valid identifiers/references, calculation results, edit history, fallback configuration downloads, JSON reports and reload. Add browser rejection and compatibility regressions; retain existing syntax and Worker dry-run checks. No mobile client or server/account integration is part of this static tool.
