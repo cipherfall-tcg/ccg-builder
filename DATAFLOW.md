@@ -44,3 +44,6 @@ flowchart TD
 5. Redistribution adjusts unpinned eligible rows proportionally to preserve sum=1 where possible.
 6. Total-sum validation/rebalance accounts for pinned and unpinned rows.
 7. If redistribution fails, the edited row remains changed and pending-invalid until corrected.
+
+
+Configuration JSON and restored localStorage pass identifier/reference validation before migration and state replacement. Reject unsafe input atomically; preserve the previous saved configuration on import refusal. Dynamic identifier attributes are escaped during rendering. Browser regressions follow valid inputs through editing/history, calculation, fallback configuration saves, JSON report export and reload. Host file pickers and pinned-directory permissions retain their existing behavior and are outside this loopback suite.
