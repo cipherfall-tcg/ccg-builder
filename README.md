@@ -80,3 +80,19 @@ These are new browser cases; retain existing JavaScript parsing and Worker dry
 runs. There is no mobile app or account/provider integration in this static tool.
 
 The seven-case browser suite also rejects unsafe keyed references and verifies valid calculation, undo/redo, fallback configuration downloads, JSON reports and reload. It blocks external browser requests and does not exercise host picker or pinned-directory permissions. Existing JavaScript syntax and Worker checks remain required.
+
+## Automatic merge validation
+
+Opted-in trusted same-repository PRs merge only from a successful `pull_request`
+validation run. The current head must equal that run's recorded head SHA, and
+`gh pr merge --match-head-commit` enforces the same revision at merge time. A stale
+run skips; a push after the metadata read is rejected by the merge precondition.
+Existing author, open/non-draft, repository and `automerge` label gates remain.
+
+`node --test tests/automerge-head.test.mjs` executes the actual workflow shell
+with a local fake GitHub CLI, covering the current head, both race windows,
+invalid trigger/revision and retained trust gates. It performs no network merge.
+Retain existing tests; add these CLI fixtures for changed automation behavior.
+No browser/Android replay is needed for workflow-only changes. See
+[GitHub workflow-run events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run)
+and the [merge precondition](https://cli.github.com/manual/gh_pr_merge).

@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "cf:check": "wrangler deploy --dry-run",
-    "test:browser": "node --test tests/import-safety.test.mjs"
+    "test:browser": "node --test tests/import-safety.test.mjs",
+    "test": "node --test tests/automerge-head.test.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",

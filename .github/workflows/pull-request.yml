@@ -24,6 +24,8 @@ jobs:
         with:
           node-version: 22
       - run: npm ci --prefer-offline --no-audit --no-fund
+      - name: Test automation safeguards
+        run: npm test
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
       - name: Parse JavaScript sources
