@@ -19,7 +19,37 @@
     return cur;
   }
 
+  // Identifiers are used by selectors and keyed references as well as markup.
+  // Reject the whole input before migration; never partially rewrite references.
+  function validateIdentifiers(input) {
+    const reserved = new Set(["__proto__", "prototype", "constructor"]);
+    function identifier(value, optional = false) {
+      if (optional && (value === undefined || value === null || value === "")) return;
+      if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value) || reserved.has(value)) {
+        throw new Error("Configuration contains an invalid identifier");
+      }
+    }
+    function walk(value) {
+      if (!value || typeof value !== "object") return;
+      if (Array.isArray(value)) { value.forEach(walk); return; }
+      for (const [key, child] of Object.entries(value)) {
+        if (key === "id") identifier(child);
+        else if (["setId", "editingSetId", "editingPackId"].includes(key)) identifier(child, true);
+        else if (key === "slotPlan" && Array.isArray(child)) child.forEach(id => identifier(id, true));
+        else if (["packCriteria", "wildcardInputs", "nudgePins", "wildcardDirty", "wildcardPendingInvalid"].includes(key) && child && typeof child === "object") {
+          Object.keys(child).forEach(id => identifier(id));
+          Object.values(child).forEach(walk);
+          continue;
+        }
+        walk(child);
+      }
+    }
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Configuration must be an object");
+    walk(input);
+  }
+
   function migrateConfig(input) {
+    validateIdentifiers(input);
     const {
       makeDefaultState, makeDefaultSet, makeDefaultPack, clone,
       getPackSet, ensurePackSelections, syncPackLibraryFromActive, syncPackConfiguration,
