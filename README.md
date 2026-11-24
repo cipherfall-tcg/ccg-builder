@@ -96,3 +96,11 @@ Retain existing tests; add these CLI fixtures for changed automation behavior.
 No browser/Android replay is needed for workflow-only changes. See
 [GitHub workflow-run events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run)
 and the [merge precondition](https://cli.github.com/manual/gh_pr_merge).
+
+## Tooling maintenance
+
+Wrangler is pinned to 4.152.0 with Undici 7.30.1 for its Miniflare transport. Review
+and remove the override when the parent adopts a patched transport version.
+Use `npm ci` for the reproducible development toolchain, parse root JavaScript
+with `node --check`, and run `npm run cf:check` for a deployment dry run. Dependency
+audit results describe the tooling inventory; publication remains separate.
